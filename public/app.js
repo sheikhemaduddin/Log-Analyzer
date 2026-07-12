@@ -32,8 +32,13 @@ async function loadStatus() {
 
 loadStatus();
 
+function setWorkspaceExpanded(expanded) {
+  $('#workspace-panes').classList.toggle('is-expanded', expanded);
+}
+
 async function runAnalysis(log) {
   if (!String(log || '').trim()) return;
+  setWorkspaceExpanded(false);
   $('#analyze-out').innerHTML = '<div class="placeholder"><span class="spinner"></span> Analyzing…</div>';
   try {
     const res = await fetch('/api/analyze', {
@@ -44,8 +49,10 @@ async function runAnalysis(log) {
     const a = await res.json();
     if (a.error) throw new Error(a.error);
     renderAnalysis(a);
+    setWorkspaceExpanded(true);
   } catch (e) {
     $('#analyze-out').innerHTML = `<div class="verdict failed">Error: ${esc(e.message)}</div>`;
+    setWorkspaceExpanded(true);
   }
 }
 
@@ -53,6 +60,7 @@ $('#analyze-btn').addEventListener('click', () => runAnalysis($('#log-input').va
 
 $('#analyze-clear').addEventListener('click', () => {
   $('#log-input').value = '';
+  setWorkspaceExpanded(false);
   $('#analyze-out').innerHTML = '<div class="placeholder">Analysis will appear here.</div>';
 });
 

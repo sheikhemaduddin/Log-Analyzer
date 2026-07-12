@@ -76,7 +76,13 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
 .panel-head { display: flex; flex-direction: column; gap: 0.25rem; min-height: 3.4rem; }
 .panel-head .lbl { margin-top: 0; }
 
-.workspace-panes { height: 300px; }
+.workspace-panes {
+  height: 300px;
+  transition: height 0.25s ease;
+}
+.workspace-panes.is-expanded {
+  height: min(680px, calc(100vh - 11rem));
+}
 .pane { display: flex; min-height: 0; height: 100%; }
 .pane-input,
 .pane-output { flex-direction: column; }
@@ -109,6 +115,10 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
   max-height: 520px;
   line-height: 1.55;
 }
+.workspace-panes.is-expanded .mono-input {
+  max-height: none;
+  resize: none;
+}
 .input.tall { min-height: 90px; resize: vertical; font-family: var(--sans); }
 .input.sm { padding: 0.5rem 0.65rem; font-size: 0.82rem; }
 .input:focus, .mono-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(77, 184, 255, 0.12); }
@@ -132,6 +142,7 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
   flex-direction: column;
 }
 .output:has(.placeholder:only-child) { justify-content: center; align-items: center; }
+.output:not(:has(.placeholder)) { align-items: stretch; }
 .placeholder { color: var(--ink-faint); font-family: var(--mono); font-size: 0.82rem; text-align: center; padding: 1rem; }
 
 /* Verdict banner */
@@ -242,6 +253,7 @@ select.input { cursor: pointer; }
   .workspace-panes,
   .workspace-footers { grid-template-columns: 1fr; }
   .workspace-panes { height: 260px; }
+  .workspace-panes.is-expanded { height: min(520px, calc(100vh - 10rem)); }
   .mono-input { min-height: 260px; }
   .pane-footer-spacer { display: none; }
 }
