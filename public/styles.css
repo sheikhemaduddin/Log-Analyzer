@@ -64,7 +64,7 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
 
 .wrap { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
 
-.workspace { display: flex; flex-direction: column; gap: 0.65rem; min-height: calc(100vh - 5.5rem); }
+.workspace { display: flex; flex-direction: column; gap: 0.65rem; }
 .workspace-headers,
 .workspace-panes,
 .workspace-footers {
@@ -76,7 +76,7 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
 .panel-head { display: flex; flex-direction: column; gap: 0.25rem; min-height: 3.4rem; }
 .panel-head .lbl { margin-top: 0; }
 
-.workspace-panes { flex: 1; min-height: 420px; }
+.workspace-panes { height: 300px; }
 .pane { display: flex; min-height: 0; height: 100%; }
 .pane-input,
 .pane-output { flex-direction: column; }
@@ -103,10 +103,10 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
 .mono-input {
   font-family: var(--mono);
   font-size: 0.8rem;
-  flex: 1;
-  min-height: 100%;
   height: 100%;
-  resize: none;
+  resize: vertical;
+  min-height: 300px;
+  max-height: 520px;
   line-height: 1.55;
 }
 .input.tall { min-height: 90px; resize: vertical; font-family: var(--sans); }
@@ -126,8 +126,6 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 1rem;
-  flex: 1;
-  min-height: 100%;
   height: 100%;
   overflow: auto;
   display: flex;
@@ -243,7 +241,7 @@ select.input { cursor: pointer; }
   .workspace-headers,
   .workspace-panes,
   .workspace-footers { grid-template-columns: 1fr; }
-  .workspace { min-height: auto; }
-  .workspace-panes { min-height: 360px; }
+  .workspace-panes { height: 260px; }
+  .mono-input { min-height: 260px; }
   .pane-footer-spacer { display: none; }
 }
