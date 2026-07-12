@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Log Triage — Deploy & Build Log Analyzer</title>
+  <script>
+    (function () {
+      var t = localStorage.getItem('log-triage-theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="brand-mark">◈</span> Log Triage</div>
+    <div class="top-actions">
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to light mode" title="Switch to light mode">
+        <span class="theme-icon theme-icon-sun" aria-hidden="true">☀</span>
+        <span class="theme-icon theme-icon-moon" aria-hidden="true">☾</span>
+      </button>
+      <span class="status-item" id="st-runtime">runtime …</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="panel-grid">
+      <div class="col">
+        <label class="lbl">Paste a deploy / build / runtime log</label>
+        <p class="hint">Verdict, exact issues, Jira-ready bug report, build timeline, and error categories. Works with Cloudways, npm, Ansible, Docker, and CI logs.</p>
+        <textarea id="log-input" class="mono-input" placeholder="Paste log output here…"></textarea>
+        <div class="row">
+          <button id="analyze-btn" class="btn-primary">Analyze</button>
+          <button id="analyze-sample" class="btn-ghost">Load sample</button>
+          <button id="analyze-clear" class="btn-ghost">Clear</button>
+        </div>
+      </div>
+      <div class="col">
+        <div id="analyze-out" class="output">
+          <div class="placeholder">Analysis will appear here.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

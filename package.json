@@ -1,0 +1,19 @@
+{
+  "name": "log-triage",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Log Triage — deploy/build log analyzer with Jira-ready bug reports for Cloudways Node.js",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "morgan": "^1.10.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
