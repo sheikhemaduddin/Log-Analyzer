@@ -27,20 +27,35 @@
   </header>
 
   <main class="wrap">
-    <div class="panel-grid">
-      <div class="col">
-        <label class="lbl">Paste a deploy / build / runtime log</label>
-        <p class="hint">Verdict, exact issues, Jira-ready bug report, build timeline, and error categories. Works with Cloudways, npm, Ansible, Docker, and CI logs.</p>
-        <textarea id="log-input" class="mono-input" placeholder="Paste log output here…"></textarea>
-        <div class="row">
+    <div class="workspace">
+      <div class="workspace-headers">
+        <div class="panel-head">
+          <label class="lbl" for="log-input">Deploy / build log</label>
+          <p class="hint">Paste output from Cloudways, npm, Ansible, Docker, or CI.</p>
+        </div>
+        <div class="panel-head">
+          <span class="lbl">Analysis</span>
+          <p class="hint">Verdict, issues, Jira bug report, timeline, and error categories.</p>
+        </div>
+      </div>
+
+      <div class="workspace-panes">
+        <div class="pane pane-input">
+          <textarea id="log-input" class="mono-input" placeholder="Paste log output here…" spellcheck="false"></textarea>
+        </div>
+        <div class="pane pane-output">
+          <div id="analyze-out" class="output">
+            <div class="placeholder">Analysis will appear here.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="workspace-footers">
+        <div class="pane-footer">
           <button id="analyze-btn" class="btn-primary">Analyze</button>
           <button id="analyze-clear" class="btn-ghost">Clear</button>
         </div>
-      </div>
-      <div class="col">
-        <div id="analyze-out" class="output">
-          <div class="placeholder">Analysis will appear here.</div>
-        </div>
+        <div class="pane-footer pane-footer-spacer" aria-hidden="true"></div>
       </div>
     </div>
   </main>
