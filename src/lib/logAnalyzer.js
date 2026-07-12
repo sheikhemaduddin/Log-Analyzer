@@ -289,12 +289,20 @@ function investigationForCategory(categoryId, message) {
 }
 
 function buildBugReport({ verdict, verdictReason, summary, issues, failedPhase }) {
-  if (!issues.length) {
+  const blocking = issues.filter((i) => !isAdvisoryIssue(i));
+
+  if (!blocking.length) {
     if (verdict === 'success') {
+      const advisory = issues.filter(isAdvisoryIssue);
+      const note = advisory.length
+        ? `Build/deploy succeeded. Advisory: ${advisory[0].title}`
+        : 'Log analysis did not detect failed tasks, error lines, or a non-zero exit code.';
       return {
-        summary: 'No defect found — deploy/build completed successfully',
-        body: 'Log analysis did not detect failed tasks, error lines, or a non-zero exit code.',
-        copyText: 'No defect found — deploy/build completed successfully.\n\nLog analysis did not detect failed tasks, error lines, or a non-zero exit code.',
+        summary: advisory.length ? advisory[0].title : 'No defect found — deploy/build completed successfully',
+        body: note,
+        copyText: advisory.length
+          ? `${advisory[0].title}\n\nBuild/deploy succeeded (exit code ${summary.exitCode ?? 'n/a'}).\n\nAdvisory only — not a deploy failure:\n${advisory[0].exactMessage}\n\nRecommended: run npm audit and upgrade affected packages before production.`
+          : 'No defect found — deploy/build completed successfully.\n\nLog analysis did not detect failed tasks, error lines, or a non-zero exit code.',
         hasIssue: false,
       };
     }
@@ -318,7 +326,7 @@ function buildBugReport({ verdict, verdictReason, summary, issues, failedPhase }
     };
   }
 
-  const primary = issues[0];
+  const primary = blocking[0] || issues[0];
   const summaryLine = primary.title;
   const envLines = [
     `- Log source: ${summary.logSource}`,
@@ -375,14 +383,25 @@ function parseVulnerabilityBreakdown(text) {
   return total > 0 ? { ...breakdown, total } : null;
 }
 
+function isAdvisoryIssue(issue) {
+  return issue.categoryId === 'security';
+}
+
+function hasBlockingIssues(issues) {
+  return issues.some((issue) => !isAdvisoryIssue(issue));
+}
+
 function buildInsights({ verdict, summary, errorCategories, firstError, failedPhase, deprecations, issues }) {
   const insights = [];
+  const blocking = (issues || []).filter((i) => !isAdvisoryIssue(i));
 
-  if (issues?.length) {
-    insights.push({ level: 'error', text: issues[0].title });
-    if (issues[0].line) {
-      insights.push({ level: 'error', text: `Exact message (line ${issues[0].line}): ${issues[0].exactMessage}` });
+  if (blocking.length) {
+    insights.push({ level: 'error', text: blocking[0].title });
+    if (blocking[0].line) {
+      insights.push({ level: 'error', text: `Exact message (line ${blocking[0].line}): ${blocking[0].exactMessage}` });
     }
+  } else if (issues?.length) {
+    insights.push({ level: 'warn', text: issues[0].title });
   }
 
   if (verdict === 'failed' && failedPhase && !issues?.length) {
@@ -562,18 +581,25 @@ function analyzeLog(raw) {
 
   let verdict;
   let verdictReason;
+  const buildSucceeded = exitCode === 0 || ansibleSuccess || PATTERNS.success.test(text);
+
   if (exitCode !== null && exitCode !== 0) {
     verdict = 'failed';
     verdictReason = issues[0]?.exactMessage || `Process exited with code ${exitCode}`;
-  } else if (issues.length > 0) {
+  } else if (buildSucceeded) {
+    verdict = 'success';
+    if (ansibleSuccess) verdictReason = 'Ansible tasks completed successfully';
+    else if (exitCode === 0) verdictReason = 'Process exited cleanly (exit code 0)';
+    else verdictReason = 'Success markers found in log';
+    if (issues.some(isAdvisoryIssue)) {
+      verdictReason += ' (npm audit advisories present — review before production)';
+    }
+  } else if (hasBlockingIssues(issues)) {
     verdict = 'failed';
-    verdictReason = issues[0].exactMessage || issues[0].title;
-  } else if (errors.length > 0 && exitCode === null && !ansibleSuccess) {
+    verdictReason = issues.find((i) => !isAdvisoryIssue(i)).exactMessage || issues[0].title;
+  } else if (errors.length > 0 && exitCode === null) {
     verdict = 'errors-found';
     verdictReason = `${errors.length} error-like line(s) detected, no explicit exit code`;
-  } else if (exitCode === 0 || ansibleSuccess) {
-    verdict = 'success';
-    verdictReason = ansibleSuccess ? 'Ansible tasks completed successfully' : 'Process exited cleanly (exit code 0)';
   } else if (PATTERNS.success.test(text)) {
     verdict = 'success';
     verdictReason = 'Success markers found, no exit code';

@@ -32,30 +32,8 @@ async function loadStatus() {
 
 loadStatus();
 
-const SAMPLE_LOG = `[2026-07-09 06:17:51 UTC] Install Dependencies
-$ npm install
-added 425 packages, and audited 426 packages in 6s
-26 vulnerabilities (1 low, 23 moderate, 2 high)
-npm warn deprecated supertest@6.3.4: Please upgrade
-npm warn deprecated glob@7.2.3: Old versions of glob are not supported
-[2026-07-09 06:18:02 UTC] Build
-$ npm run build
-vite v5.4.0 building for production...
-node v20.11.0
-[info] Port detected from .env: 3000
-[2026-07-09 06:18:20 UTC] Finished
-Status : SUCCESS
-[exit_code: 0]`;
-
-$('#analyze-sample').addEventListener('click', () => { $('#log-input').value = SAMPLE_LOG; });
-$('#analyze-clear').addEventListener('click', () => {
-  $('#log-input').value = '';
-  $('#analyze-out').innerHTML = '<div class="placeholder">Analysis will appear here.</div>';
-});
-
-$('#analyze-btn').addEventListener('click', async () => {
-  const log = $('#log-input').value;
-  if (!log.trim()) return;
+async function runAnalysis(log) {
+  if (!String(log || '').trim()) return;
   $('#analyze-out').innerHTML = '<div class="placeholder"><span class="spinner"></span> Analyzing…</div>';
   try {
     const res = await fetch('/api/analyze', {
@@ -69,6 +47,13 @@ $('#analyze-btn').addEventListener('click', async () => {
   } catch (e) {
     $('#analyze-out').innerHTML = `<div class="verdict failed">Error: ${esc(e.message)}</div>`;
   }
+}
+
+$('#analyze-btn').addEventListener('click', () => runAnalysis($('#log-input').value));
+
+$('#analyze-clear').addEventListener('click', () => {
+  $('#log-input').value = '';
+  $('#analyze-out').innerHTML = '<div class="placeholder">Analysis will appear here.</div>';
 });
 
 function renderAnalysis(a) {
@@ -81,7 +66,7 @@ function renderAnalysis(a) {
       <span class="verdict-reason">${esc(a.verdictReason)}</span>
     </div>`;
 
-  if (a.bugReport) {
+  if (a.bugReport?.hasIssue) {
     html += `
       <div class="bug-report-box">
         <div class="bug-report-head">
@@ -91,6 +76,8 @@ function renderAnalysis(a) {
         <div class="bug-report-summary">${esc(a.bugReport.summary)}</div>
         <pre class="bug-report-body">${esc(a.bugReport.copyText)}</pre>
       </div>`;
+  } else if (a.verdict === 'success') {
+    html += `<div class="insight insight-info">No bug to file — deploy/build completed successfully. Review advisories below if any.</div>`;
   }
 
   if (a.issues?.length) {
@@ -171,14 +158,14 @@ function renderAnalysis(a) {
     html += a.commands.map((c) => `<div class="log-line"><span class="ln">L${c.line}</span><span class="tx">${esc(c.command)}</span></div>`).join('');
   }
 
-  if (a.errors.length) {
+  if (a.errors.length && a.verdict !== 'success') {
     html += `<div class="block-h">Errors (${a.errors.length})</div>`;
     html += a.errors.map((e) => `<div class="log-line err"><span class="ln">L${e.line}</span><span class="tx">${esc(e.text)}${e.category ? `<span class="line-cat">${esc(e.category)}</span>` : ''}</span></div>`).join('');
   }
   if (a.deprecations.length) {
     html += `<div class="block-h">Deprecated packages</div><div class="tag-list">${a.deprecations.map((d) => `<span class="tag">${esc(d)}</span>`).join('')}</div>`;
   }
-  if (a.warnings.length) {
+  if (a.warnings.length && a.verdict !== 'success') {
     html += `<div class="block-h">Warnings (${a.warnings.length})</div>`;
     html += a.warnings.slice(0, 15).map((w) => `<div class="log-line warn"><span class="ln">L${w.line}</span><span class="tx">${esc(w.text)}</span></div>`).join('');
   }
