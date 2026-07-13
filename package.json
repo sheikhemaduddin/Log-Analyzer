@@ -1,8 +1,8 @@
 {
-  "name": "log-triage",
+  "name": "qa-signal",
   "version": "1.0.0",
   "private": true,
-  "description": "Log Triage — deploy/build log analyzer with Jira-ready bug reports for Cloudways Node.js",
+  "description": "QA Signal — deploy log analyzer and QA knowledge hub for Cloudways Node.js",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {

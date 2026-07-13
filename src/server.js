@@ -38,7 +38,7 @@ app.get('/api/digest', async (req, res) => {
 app.get('/api/*', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.listen(PORT, () => {
-  console.log(`[log-triage] listening on ${PORT}`);
+  console.log(`[qa-signal] listening on ${PORT}`);
   warmDigestCache();
 });
 

@@ -267,7 +267,7 @@ async function fetchText(url, timeoutMs = 14000) {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'LogTriage-QADigest/1.0',
+        'User-Agent': 'QASignal-Digest/1.0',
         Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, text/html',
       },
     });
@@ -438,9 +438,9 @@ async function getDigest({ refresh = false } = {}) {
 async function warmDigestCache() {
   try {
     await getDigest({ refresh: true });
-    console.log('[log-triage] digest cache warmed');
+    console.log('[qa-signal] digest cache warmed');
   } catch (e) {
-    console.warn('[log-triage] digest warmup failed:', e.message);
+    console.warn('[qa-signal] digest warmup failed:', e.message);
   }
 }
 

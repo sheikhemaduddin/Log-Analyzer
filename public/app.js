@@ -5,7 +5,7 @@ let lastBugReportText = '';
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('log-triage-theme', theme);
+  localStorage.setItem('qa-signal-theme', theme);
   const btn = $('#theme-toggle');
   const isDark = theme === 'dark';
   btn.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');

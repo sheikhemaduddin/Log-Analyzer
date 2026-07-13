@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Log Triage — Deploy Log Analyzer & QA Knowledge Hub</title>
+  <title>QA Signal — Deploy Log Analyzer & QA Knowledge Hub</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/favicon.svg" />
   <script>
     (function () {
-      var t = localStorage.getItem('log-triage-theme');
+      var t = localStorage.getItem('qa-signal-theme') || localStorage.getItem('log-triage-theme');
       if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
@@ -16,7 +16,7 @@
 </head>
 <body>
   <header class="top">
-    <div class="brand"><span class="brand-mark">◈</span> Log Triage</div>
+    <div class="brand"><span class="brand-mark">◈</span> QA Signal</div>
     <div class="top-actions">
       <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to light mode" title="Switch to light mode">
         <span class="theme-icon theme-icon-sun" aria-hidden="true">☀</span>
@@ -27,7 +27,7 @@
   </header>
 
   <nav class="tabs">
-    <button class="tab active" data-tab="analyzer">Log Triage</button>
+    <button class="tab active" data-tab="analyzer">Analyze</button>
     <button class="tab" data-tab="digest">QA Knowledge Hub</button>
   </nav>
 
