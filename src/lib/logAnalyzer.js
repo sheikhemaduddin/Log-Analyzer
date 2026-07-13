@@ -400,7 +400,7 @@ function buildInsights({ verdict, summary, errorCategories, firstError, failedPh
     if (blocking[0].line) {
       insights.push({ level: 'error', text: `Exact message (line ${blocking[0].line}): ${blocking[0].exactMessage}` });
     }
-  } else if (issues?.length) {
+  } else if (issues?.length && verdict !== 'success') {
     insights.push({ level: 'warn', text: issues[0].title });
   }
 
@@ -650,11 +650,17 @@ function analyzeLog(raw) {
     insights,
     issues,
     bugReport,
-    firstError: issues[0] ? {
-      line: issues[0].line,
-      text: issues[0].excerpt || issues[0].exactMessage,
-      category: issues[0].category,
-    } : firstError,
+    firstError: (() => {
+      const blocking = issues.filter((i) => !isAdvisoryIssue(i));
+      if (blocking[0]) {
+        return {
+          line: blocking[0].line,
+          text: blocking[0].excerpt || blocking[0].exactMessage,
+          category: blocking[0].category,
+        };
+      }
+      return verdict === 'success' ? null : firstError;
+    })(),
     failedPhase: failedPhase ? { phase: failedPhase.phase, line: failedPhase.line } : null,
     errorCategories,
     errors: errors.slice(0, 50),

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Log Triage — Deploy & Build Log Analyzer</title>
+  <title>Log Triage — Deploy Log Analyzer & QA Knowledge Hub</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/favicon.svg" />
   <script>
@@ -26,38 +26,71 @@
     </div>
   </header>
 
-  <main class="wrap">
-    <div class="workspace">
-      <div class="workspace-headers">
-        <div class="panel-head">
-          <label class="lbl" for="log-input">Deploy / build log</label>
-          <p class="hint">Paste output from Cloudways, npm, Ansible, Docker, or CI.</p>
-        </div>
-        <div class="panel-head">
-          <span class="lbl">Analysis</span>
-          <p class="hint">Verdict, issues, Jira bug report, timeline, and error categories.</p>
-        </div>
-      </div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="analyzer">Log Triage</button>
+    <button class="tab" data-tab="digest">QA Knowledge Hub</button>
+  </nav>
 
-      <div class="workspace-panes" id="workspace-panes">
-        <div class="pane pane-input">
-          <textarea id="log-input" class="mono-input" placeholder="Paste log output here…" spellcheck="false"></textarea>
-        </div>
-        <div class="pane pane-output">
-          <div id="analyze-out" class="output">
-            <div class="placeholder">Analysis will appear here.</div>
+  <main class="wrap">
+    <section class="panel active" id="tab-analyzer">
+      <div class="workspace">
+        <div class="workspace-headers">
+          <div class="panel-head">
+            <label class="lbl" for="log-input">Deploy / build log</label>
+            <p class="hint">Paste output from Cloudways, npm, Ansible, Docker, or CI.</p>
+          </div>
+          <div class="panel-head">
+            <span class="lbl">Analysis</span>
+            <p class="hint">Verdict, issues, Jira bug report, timeline, and error categories.</p>
           </div>
         </div>
-      </div>
 
-      <div class="workspace-footers">
-        <div class="pane-footer">
-          <button id="analyze-btn" class="btn-primary">Analyze</button>
-          <button id="analyze-clear" class="btn-ghost">Clear</button>
+        <div class="workspace-panes" id="workspace-panes">
+          <div class="pane pane-input">
+            <textarea id="log-input" class="mono-input" placeholder="Paste log output here…" spellcheck="false"></textarea>
+          </div>
+          <div class="pane pane-output">
+            <div id="analyze-out" class="output">
+              <div class="placeholder">Analysis will appear here.</div>
+            </div>
+          </div>
         </div>
-        <div class="pane-footer pane-footer-spacer" aria-hidden="true"></div>
+
+        <div class="workspace-footers">
+          <div class="pane-footer">
+            <button id="analyze-btn" class="btn-primary">Analyze</button>
+            <button id="analyze-clear" class="btn-ghost">Clear</button>
+          </div>
+          <div class="pane-footer pane-footer-spacer" aria-hidden="true"></div>
+        </div>
       </div>
-    </div>
+    </section>
+
+    <section class="panel" id="tab-digest">
+      <div class="digest-header">
+        <div>
+          <h2 class="digest-title">QA Knowledge Hub</h2>
+          <p class="hint">Competitor quality trends, Cloudways guides, and QA community news. Refreshes every 6 hours.</p>
+        </div>
+        <div class="row">
+          <a class="btn-ghost" href="https://support.cloudways.com/en/" target="_blank" rel="noopener noreferrer">Open Knowledge Hub</a>
+          <button id="digest-refresh" class="btn-secondary">Refresh</button>
+        </div>
+      </div>
+      <div id="digest-meta" class="digest-meta"></div>
+      <nav class="digest-tabs" id="digest-tabs" aria-label="Knowledge hub sections">
+        <button class="digest-tab active" type="button" data-digest-view="competitors">Competitor trends</button>
+        <button class="digest-tab" type="button" data-digest-view="kb">Cloudways guides</button>
+        <button class="digest-tab" type="button" data-digest-view="qa">QA community</button>
+      </nav>
+      <div class="digest-toolbar" id="digest-toolbar">
+        <input id="digest-search" class="digest-search" type="search" placeholder="Search companies or trends (e.g. Vercel, performance, security)…" autocomplete="off" />
+        <div id="digest-company-filters" class="digest-company-filters"></div>
+      </div>
+      <div id="digest-out" class="digest-out">
+        <div class="placeholder"><span class="spinner"></span> Loading knowledge hub…</div>
+      </div>
+    </section>
   </main>
 
   <script src="/app.js"></script>

@@ -256,4 +256,125 @@ select.input { cursor: pointer; }
   .workspace-panes.is-expanded { height: min(520px, calc(100vh - 10rem)); }
   .mono-input { min-height: 260px; }
   .pane-footer-spacer { display: none; }
+  .digest-grid { grid-template-columns: 1fr; }
+  .digest-header { flex-direction: column; align-items: flex-start; }
+}
+
+/* QA Knowledge Hub */
+.digest-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.digest-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.25rem; }
+.digest-meta { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-faint); margin-bottom: 0.75rem; }
+.digest-tabs { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.digest-tab {
+  font-size: 0.78rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.digest-tab.active { border-color: var(--accent); color: var(--accent); background: var(--panel-2); }
+.digest-toolbar { display: flex; flex-direction: column; gap: 0.55rem; margin-bottom: 0.85rem; }
+.digest-toolbar.hidden { display: none; }
+.digest-search {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.84rem;
+}
+.digest-search:focus { outline: none; border-color: var(--accent); }
+.digest-company-filters { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.digest-chip {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.digest-chip.active { border-color: var(--accent); color: var(--accent); background: var(--panel-2); }
+.digest-out { min-height: 200px; }
+.digest-section { margin-bottom: 1.75rem; }
+.digest-section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; margin-bottom: 0.25rem; }
+.digest-section-title { font-size: 0.95rem; font-weight: 600; }
+.digest-section-desc { margin-bottom: 0.75rem; }
+.digest-hub-link { font-size: 0.78rem; color: var(--accent); text-decoration: none; white-space: nowrap; }
+.digest-hub-link:hover { text-decoration: underline; }
+.digest-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.65rem; }
+.digest-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.85rem 0.95rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s, background 0.15s;
+}
+.digest-card:hover { border-color: var(--accent); background: var(--panel-2); }
+.digest-card-kb { border-left: 3px solid var(--accent); }
+.digest-card-source { font-family: var(--mono); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); }
+.digest-card-title { font-size: 0.88rem; font-weight: 600; line-height: 1.35; color: var(--ink); }
+.digest-card-excerpt { font-size: 0.78rem; color: var(--ink-dim); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.digest-card-date { font-family: var(--mono); font-size: 0.68rem; color: var(--ink-faint); margin-top: auto; }
+.digest-empty { font-size: 0.82rem; color: var(--ink-faint); padding: 1rem; background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; }
+.digest-errors { margin-top: 1rem; }
+.digest-section-group { margin-bottom: 2rem; }
+.digest-companies { display: flex; flex-direction: column; gap: 1.25rem; }
+.digest-company {
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.digest-company[data-company="company-cloudways"] { border-left: 3px solid var(--accent); }
+.digest-company-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.35rem; }
+.digest-company-name { font-size: 0.92rem; font-weight: 600; }
+.digest-company-name a { color: var(--ink); text-decoration: none; }
+.digest-company-name a:hover { color: var(--accent); }
+.digest-company-cat {
+  display: inline-block;
+  margin-top: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+}
+.digest-quality-focus {
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+  line-height: 1.45;
+  margin-bottom: 0.75rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--line);
+}
+.digest-card-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+.digest-tag {
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.12rem 0.35rem;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--accent);
+  border: 1px solid var(--line);
 }

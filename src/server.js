@@ -2,6 +2,7 @@ const express = require('express');
 const morgan = require('morgan');
 const path = require('path');
 const { analyzeLog } = require('./lib/logAnalyzer');
+const { getDigest, warmDigestCache } = require('./lib/qaDigest');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,8 +25,21 @@ app.post('/api/analyze', (req, res) => {
   }
 });
 
+app.get('/api/digest', async (req, res) => {
+  try {
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const digest = await getDigest({ refresh });
+    res.json({ ok: true, ...digest });
+  } catch (e) {
+    res.status(502).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/*', (req, res) => res.status(404).json({ error: 'Not found' }));
 
-app.listen(PORT, () => console.log(`[log-triage] listening on ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`[log-triage] listening on ${PORT}`);
+  warmDigestCache();
+});
 
 module.exports = app;
