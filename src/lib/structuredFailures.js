@@ -799,13 +799,16 @@ function parseLaravelAppStructured(text, lines) {
   const jobClass = extractQuotedField(text, 'job_class');
   const queue = extractQuotedField(text, 'queue');
   const eventName = extractQuotedField(text, 'event_name');
-  const error = extractQuotedField(text, 'error') || (curl ? curl[0].slice(0, 300) : null);
+  const actualError = extractQuotedField(text, 'actual_error');
+  const error = actualError
+    || extractQuotedField(text, 'error')
+    || (curl ? curl[0].slice(0, 300) : null);
   const errorFile = extractQuotedField(text, 'error_file');
   const errorLine = extractNumericField(text, 'error_line');
   const jobId = extractQuotedField(text, 'job_id');
   const level = extractQuotedField(text, 'level_name') || extractNumericField(text, 'level');
 
-  if (!curl && !connect && !error && !jobClass && !/level_name"\s*:\s*"ERROR"/i.test(text)) {
+  if (!curl && !connect && !error && !jobClass && !actualError && !/level_name"\s*:\s*"ERROR"/i.test(text)) {
     return null;
   }
 
@@ -814,7 +817,9 @@ function parseLaravelAppStructured(text, lines) {
   const curlCode = curl?.[1] || null;
 
   let headline;
-  if (curlCode === '7' && host) {
+  if (actualError) {
+    headline = String(actualError).slice(0, 160);
+  } else if (curlCode === '7' && host) {
     headline = `Laravel queue job failed: cannot reach ${host}${port ? `:${port}` : ''} (cURL error 7)`;
   } else if (curlCode) {
     headline = `Laravel HTTP client failed: cURL error ${curlCode}`;
@@ -825,8 +830,9 @@ function parseLaravelAppStructured(text, lines) {
   }
 
   const descriptionParts = [
+    actualError && `actual_error: ${actualError}.`,
     message && `Job reported: ${message.replace(/^ailed\b/i, 'Failed')}.`,
-    error && `Underlying error: ${error}.`,
+    error && error !== actualError && `Underlying error: ${error}.`,
     host && `The worker could not connect to service "${host}"${port ? ` on port ${port}` : ''}.`,
     queue && `Queue: ${queue}.`,
     jobClass && `Listener/job: ${jobClass}.`,
@@ -858,6 +864,7 @@ function parseLaravelAppStructured(text, lines) {
     excerpt: (error || message || text).slice(0, 400),
     failedPhase: queue ? `queue:${queue}` : (jobClass || 'Laravel job'),
     details: [
+      actualError && { label: 'actual_error', value: String(actualError).slice(0, 300) },
       level && { label: 'Level', value: String(level) },
       message && { label: 'Message', value: message.replace(/^ailed\b/i, 'Failed').slice(0, 200) },
       eventName && { label: 'Event', value: eventName },
@@ -868,7 +875,7 @@ function parseLaravelAppStructured(text, lines) {
       port && { label: 'Port', value: port },
       url && { label: 'URL', value: url },
       curlCode && { label: 'cURL code', value: curlCode },
-      error && { label: 'Error', value: error.slice(0, 260) },
+      error && error !== actualError && { label: 'Error', value: String(error).slice(0, 260) },
       errorFile && { label: 'Error file', value: `${errorFile}${errorLine ? `:${errorLine}` : ''}` },
     ].filter(Boolean),
     resolution,
@@ -885,8 +892,8 @@ function parseLaravelAppStructured(text, lines) {
 function parseRuntimeStructured(text, lines) {
   const curlEarly = text.match(/cURL error\s+(\d+)/i);
   if (curlEarly && /Failed to connect|Could not connect|Connection refused/i.test(text)) {
-    // Prefer Laravel parser when job context exists; otherwise handle bare cURL.
-    if (!/"job_class"|MixpanelListener|Illuminate\\/i.test(text)) {
+    // Prefer Laravel parser when job context / actual_error exists; otherwise handle bare cURL.
+    if (!/"job_class"|"actual_error"|MixpanelListener|Illuminate\\/i.test(text)) {
       const connect = text.match(/Failed to connect to\s+(\S+)\s+port\s+(\d+)/i);
       const host = connect?.[1];
       const port = connect?.[2];

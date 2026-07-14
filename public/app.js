@@ -1,7 +1,15 @@
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+const HISTORY_KEY = 'qa-signal-history-v1';
+const SHARE_KEY = 'qa-signal-shares-v1';
+const MAX_HISTORY = 25;
+const MAX_LOG_STORE = 180000;
+
 let lastBugReportText = '';
+let lastAnalysis = null;
+let lastLogText = '';
+let lastShareId = null;
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -28,6 +36,7 @@ document.querySelectorAll('.tab').forEach((t) => {
     t.classList.add('active');
     $(`#tab-${t.dataset.tab}`).classList.add('active');
     if (t.dataset.tab === 'digest' && !digestLoaded) loadDigest();
+    if (t.dataset.tab === 'history') renderHistory();
   });
 });
 
@@ -48,8 +57,111 @@ function setWorkspaceExpanded(expanded) {
   $('#workspace-panes').classList.toggle('is-expanded', expanded);
 }
 
-async function runAnalysis(log) {
+function uid() {
+  return `qa_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function rootCauseFromAnalysis(a) {
+  const fd = a.failureDetail || {};
+  const details = fd.details || [];
+  const actual = details.find((d) => /actual[_\s-]?error|error$/i.test(d.label))?.value
+    || details.find((d) => d.label === 'Error')?.value
+    || details.find((d) => d.label === 'Primary signal')?.value
+    || fd.headline
+    || a.verdictReason
+    || a.firstError?.text
+    || 'No root cause extracted';
+  return String(actual).trim();
+}
+
+function suggestedFixes(a) {
+  if (a.failureDetail?.resolution?.length) return a.failureDetail.resolution;
+  if (a.issues?.[0]?.investigation?.length) return a.issues[0].investigation;
+  return [];
+}
+
+function buildSharePayload(a, log) {
+  return {
+    v: 1,
+    id: uid(),
+    at: new Date().toISOString(),
+    log: String(log || '').slice(0, MAX_LOG_STORE),
+    analysis: {
+      verdict: a.verdict,
+      verdictReason: a.verdictReason,
+      summary: a.summary,
+      failureDetail: a.failureDetail,
+      bugReport: a.bugReport,
+      firstError: a.firstError,
+      failedPhase: a.failedPhase,
+      errorCategories: a.errorCategories,
+      insights: a.insights,
+      issues: (a.issues || []).slice(0, 5),
+    },
+  };
+}
+
+function saveHistoryEntry(a, log) {
+  const entry = {
+    id: uid(),
+    at: new Date().toISOString(),
+    verdict: a.verdict,
+    headline: rootCauseFromAnalysis(a).slice(0, 180),
+    source: a.summary?.logSource || 'generic',
+    framework: a.summary?.framework || 'unknown',
+    log: String(log || '').slice(0, MAX_LOG_STORE),
+    analysis: a,
+  };
+  const list = readJson(HISTORY_KEY, []);
+  list.unshift(entry);
+  writeJson(HISTORY_KEY, list.slice(0, MAX_HISTORY));
+  return entry;
+}
+
+function saveShare(payload) {
+  const map = readJson(SHARE_KEY, {});
+  map[payload.id] = payload;
+  const ids = Object.keys(map);
+  if (ids.length > 40) {
+    ids.sort((x, y) => (map[x].at < map[y].at ? -1 : 1));
+    ids.slice(0, ids.length - 40).forEach((id) => delete map[id]);
+  }
+  writeJson(SHARE_KEY, map);
+  return payload.id;
+}
+
+function shareUrlFor(id) {
+  const url = new URL(window.location.href);
+  url.hash = `share=${id}`;
+  return url.toString();
+}
+
+async function copyText(text) {
+  await navigator.clipboard.writeText(text);
+}
+
+function flashBtn(btn, label = 'Done!') {
+  const prev = btn.textContent;
+  btn.textContent = label;
+  setTimeout(() => { btn.textContent = prev; }, 1600);
+}
+
+async function runAnalysis(log, { skipHistory = false } = {}) {
   if (!String(log || '').trim()) return;
+  lastLogText = String(log);
   setWorkspaceExpanded(false);
   $('#analyze-out').innerHTML = '<div class="placeholder"><span class="spinner"></span> Analyzing…</div>';
   try {
@@ -60,8 +172,13 @@ async function runAnalysis(log) {
     });
     const a = await res.json();
     if (a.error) throw new Error(a.error);
+    lastAnalysis = a;
+    if (!skipHistory) saveHistoryEntry(a, log);
+    const sharePayload = buildSharePayload(a, log);
+    lastShareId = saveShare(sharePayload);
     renderAnalysis(a);
     setWorkspaceExpanded(true);
+    renderHistory();
   } catch (e) {
     $('#analyze-out').innerHTML = `<div class="verdict failed">Error: ${esc(e.message)}</div>`;
     setWorkspaceExpanded(true);
@@ -72,20 +189,291 @@ $('#analyze-btn').addEventListener('click', () => runAnalysis($('#log-input').va
 
 $('#analyze-clear').addEventListener('click', () => {
   $('#log-input').value = '';
+  lastAnalysis = null;
+  lastLogText = '';
+  lastShareId = null;
   setWorkspaceExpanded(false);
   $('#analyze-out').innerHTML = '<div class="placeholder">Analysis will appear here.</div>';
 });
 
+// --- File choose + drag/drop ---
+async function loadLogFile(file) {
+  if (!file) return;
+  const text = await file.text();
+  $('#log-input').value = text;
+  await runAnalysis(text);
+}
+
+$('#log-file')?.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  loadLogFile(file);
+  e.target.value = '';
+});
+
+const dropZone = $('#drop-zone');
+let dragDepth = 0;
+
+function setDropActive(on) {
+  dropZone?.classList.toggle('is-dragover', on);
+  const overlay = $('#drop-overlay');
+  if (overlay) overlay.setAttribute('aria-hidden', on ? 'false' : 'true');
+}
+
+function isFileDrag(e) {
+  return Array.from(e.dataTransfer?.types || []).includes('Files');
+}
+
+dropZone?.addEventListener('dragenter', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  dragDepth += 1;
+  setDropActive(true);
+});
+dropZone?.addEventListener('dragover', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  setDropActive(true);
+});
+dropZone?.addEventListener('dragleave', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) setDropActive(false);
+});
+dropZone?.addEventListener('drop', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  dragDepth = 0;
+  setDropActive(false);
+  const file = e.dataTransfer?.files?.[0];
+  if (file) loadLogFile(file);
+});
+// Clear stuck overlay if the drag ends outside the pane
+window.addEventListener('dragend', () => {
+  dragDepth = 0;
+  setDropActive(false);
+});
+document.addEventListener('paste', () => {
+  dragDepth = 0;
+  setDropActive(false);
+});
+
+function buildAssessmentMarkdown(a, log) {
+  const s = a.summary || {};
+  const fd = a.failureDetail || {};
+  const details = (fd.details || []).map((d) => `- **${d.label}:** ${d.value}`).join('\n');
+  const fixes = suggestedFixes(a).map((step, i) => `${i + 1}. ${step}`).join('\n');
+  const insights = (a.insights || []).map((i) => `- (${i.level}) ${i.text}`).join('\n');
+  return [
+    '# QA Signal Assessment',
+    '',
+    `- **Generated:** ${new Date().toISOString()}`,
+    `- **Verdict:** ${a.verdict}`,
+    `- **Reason:** ${a.verdictReason || '—'}`,
+    '',
+    '## Root cause',
+    '',
+    rootCauseFromAnalysis(a),
+    '',
+    '## Suggested fixes',
+    '',
+    fixes || '_None_',
+    '',
+    '## Failure details',
+    '',
+    fd.headline ? `**${fd.headline}**` : '_No structured failure detail_',
+    fd.description || '',
+    details || '',
+    '',
+    '## Environment',
+    '',
+    `- Source: ${s.logSource || '—'}`,
+    `- Environment: ${s.environment || '—'}`,
+    `- Framework: ${s.framework || '—'}`,
+    `- Package manager: ${s.packageManager || '—'}`,
+    s.nodeVersion ? `- Node: ${s.nodeVersion}` : null,
+    s.exitCode != null ? `- Exit code: ${s.exitCode}` : null,
+    s.totalLines != null ? `- Log lines: ${s.totalLines}` : null,
+    '',
+    '## Insights',
+    '',
+    insights || '_None_',
+    '',
+    a.bugReport?.copyText ? '## Bug report\n' : null,
+    a.bugReport?.copyText || null,
+    '',
+    '## Original log (excerpt)',
+    '',
+    '```',
+    String(log || '').slice(0, 12000),
+    String(log || '').length > 12000 ? '\n…(truncated)…' : '',
+    '```',
+    '',
+    '_Generated by QA Signal — share this file with teammates._',
+  ].filter((line) => line !== null).join('\n');
+}
+
+function buildAssessmentJson(a, log) {
+  return {
+    tool: 'QA Signal',
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    verdict: a.verdict,
+    verdictReason: a.verdictReason,
+    rootCause: rootCauseFromAnalysis(a),
+    suggestedFixes: suggestedFixes(a),
+    summary: a.summary,
+    failureDetail: a.failureDetail,
+    insights: a.insights,
+    bugReport: a.bugReport,
+    firstError: a.firstError,
+    failedPhase: a.failedPhase,
+    errorCategories: a.errorCategories,
+    issues: (a.issues || []).slice(0, 10),
+    logExcerpt: String(log || '').slice(0, 50000),
+  };
+}
+
+function downloadTextFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadAssessment(a) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const base = `qa-signal-assessment-${stamp}`;
+  downloadTextFile(`${base}.md`, buildAssessmentMarkdown(a, lastLogText), 'text/markdown;charset=utf-8');
+  downloadTextFile(`${base}.json`, JSON.stringify(buildAssessmentJson(a, lastLogText), null, 2), 'application/json;charset=utf-8');
+}
+
+async function shareAnalysis(a) {
+  if (!lastShareId) {
+    lastShareId = saveShare(buildSharePayload(a, lastLogText));
+  }
+  // Share links are local-only: payload lives in this browser's localStorage, not on the server.
+  const url = shareUrlFor(lastShareId);
+  const summary = [
+    `QA Signal: ${verdictLabel(a.verdict)}`,
+    rootCauseFromAnalysis(a),
+    '',
+    `Open on this same browser/device:`,
+    url,
+    '',
+    `(History and share data stay in your browser — not sent to other users or machines.)`,
+  ].join('\n');
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'QA Signal analysis', text: summary, url });
+      return;
+    } catch { /* fall through to copy */ }
+  }
+  await copyText(url);
+}
+
+function restoreFromHistory(entry) {
+  document.querySelectorAll('.tab').forEach((x) => x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach((x) => x.classList.remove('active'));
+  $('.tab[data-tab="analyzer"]')?.classList.add('active');
+  $('#tab-analyzer')?.classList.add('active');
+  $('#log-input').value = entry.log || '';
+  lastLogText = entry.log || '';
+  lastAnalysis = entry.analysis;
+  const sharePayload = buildSharePayload(entry.analysis, entry.log);
+  lastShareId = saveShare(sharePayload);
+  renderAnalysis(entry.analysis);
+  setWorkspaceExpanded(true);
+}
+
+function renderHistory() {
+  const list = readJson(HISTORY_KEY, []);
+  const out = $('#history-out');
+  if (!out) return;
+  if (!list.length) {
+    out.innerHTML = '<div class="placeholder">No analyses yet — run Analyze to start building history.</div>';
+    return;
+  }
+  out.innerHTML = list.map((item) => `
+    <button type="button" class="history-card" data-id="${esc(item.id)}">
+      <div class="history-card-top">
+        <span class="history-verdict verdict-chip ${esc(item.verdict)}">${esc(verdictLabel(item.verdict))}</span>
+        <span class="history-time">${esc(new Date(item.at).toLocaleString())}</span>
+      </div>
+      <div class="history-headline">${esc(item.headline)}</div>
+      <div class="history-meta">
+        <span class="tag">${esc(item.source)}</span>
+        <span class="tag">${esc(item.framework)}</span>
+      </div>
+    </button>
+  `).join('');
+  out.querySelectorAll('.history-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const entry = list.find((x) => x.id === card.dataset.id);
+      if (entry) restoreFromHistory(entry);
+    });
+  });
+}
+
+$('#history-clear')?.addEventListener('click', () => {
+  if (!confirm('Clear all saved analysis history on this browser?')) return;
+  writeJson(HISTORY_KEY, []);
+  renderHistory();
+});
+
+function detailRowsFor(fd) {
+  if (fd.details?.length) return fd.details;
+  return [
+    fd.conflict?.installed && { label: 'Installed', value: `${fd.conflict.installed}${fd.conflict.installedFrom ? ` (${fd.conflict.installedFrom})` : ''}` },
+    fd.conflict?.requiredBy && { label: 'Required by', value: `${fd.conflict.requiredBy}${fd.conflict.requiredRange ? ` needs ${fd.conflict.requiredRange}` : ''}` },
+    fd.conflict?.wouldInstall && { label: 'Would install', value: fd.conflict.wouldInstall },
+    fd.failedPhase && { label: 'Failed phase', value: fd.failedPhase },
+    fd.failedCommand && { label: 'Command', value: fd.failedCommand },
+  ].filter(Boolean);
+}
+
 function renderAnalysis(a) {
   const s = a.summary;
   const isSuccess = a.verdict === 'success';
+  const rootCause = rootCauseFromAnalysis(a);
+  const fixes = suggestedFixes(a);
   const stat = (n, l, cls = '') => `<div class="stat"><span class="stat-n ${cls}">${n}</span><span class="stat-l">${l}</span></div>`;
   const vb = s.vulnerabilityBreakdown;
+
   let html = `
+    <div class="report-actions">
+      <button type="button" class="btn-secondary btn-sm download-assessment-btn">Download assessment</button>
+      <button type="button" class="btn-ghost btn-sm share-btn">Copy local link</button>
+      ${!isSuccess && a.bugReport?.hasIssue ? '<button type="button" class="btn-ghost btn-sm copy-bug-btn">Copy report</button>' : ''}
+    </div>
     <div class="verdict ${a.verdict}">
       <span>${verdictLabel(a.verdict)}</span>
       <span class="verdict-reason">${esc(a.verdictReason)}</span>
     </div>`;
+
+  if (!isSuccess) {
+    html += `
+      <div class="root-cause-box">
+        <div class="block-h">Root cause</div>
+        <div class="root-cause-text">${esc(rootCause)}</div>
+      </div>`;
+  }
+
+  if (!isSuccess && fixes.length) {
+    html += `<div class="fixes-box">`;
+    html += `<div class="block-h">Suggested fixes</div>`;
+    html += `<ol class="resolution-list">${fixes.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`;
+    html += `</div>`;
+  }
 
   if (!isSuccess && a.failureDetail) {
     const fd = a.failureDetail;
@@ -93,25 +481,14 @@ function renderAnalysis(a) {
     html += `<div class="block-h">What failed</div>`;
     html += `<div class="failure-headline">${esc(fd.headline)}</div>`;
     if (fd.description) html += `<p class="failure-desc">${esc(fd.description)}</p>`;
-    const detailRows = (fd.details && fd.details.length)
-      ? fd.details
-      : [
-          fd.conflict?.installed && { label: 'Installed', value: `${fd.conflict.installed}${fd.conflict.installedFrom ? ` (${fd.conflict.installedFrom})` : ''}` },
-          fd.conflict?.requiredBy && { label: 'Required by', value: `${fd.conflict.requiredBy}${fd.conflict.requiredRange ? ` needs ${fd.conflict.requiredRange}` : ''}` },
-          fd.conflict?.wouldInstall && { label: 'Would install', value: fd.conflict.wouldInstall },
-          fd.failedPhase && { label: 'Failed phase', value: fd.failedPhase },
-          fd.failedCommand && { label: 'Command', value: fd.failedCommand },
-        ].filter(Boolean);
+    const detailRows = detailRowsFor(fd);
     if (detailRows.length) {
       html += `<div class="failure-conflict">`;
       detailRows.forEach((row) => {
-        html += `<div><span class="failure-label">${esc(row.label)}</span> ${esc(row.value)}</div>`;
+        const isError = /error|actual/i.test(row.label);
+        html += `<div class="${isError ? 'detail-emphasis' : ''}"><span class="failure-label">${esc(row.label)}</span> ${esc(row.value)}</div>`;
       });
       html += `</div>`;
-    }
-    if (fd.resolution?.length) {
-      html += `<div class="block-h">Recommended fixes</div>`;
-      html += `<ol class="resolution-list">${fd.resolution.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`;
     }
     html += `</div>`;
   }
@@ -120,7 +497,7 @@ function renderAnalysis(a) {
     html += `
       <div class="bug-report-box">
         <div class="bug-report-head">
-          <span class="block-h" style="margin:0">Bug report — paste into Jira</span>
+          <span class="block-h" style="margin:0">Bug report</span>
           <button type="button" class="btn-ghost btn-sm copy-bug-btn">Copy</button>
         </div>
         <div class="bug-report-summary">${esc(a.bugReport.summary)}</div>
@@ -189,7 +566,7 @@ function renderAnalysis(a) {
   }
 
   if (!isSuccess && a.firstError) {
-    html += `<div class="block-h">First error (root cause candidate)</div>`;
+    html += `<div class="block-h">First error (log signal)</div>`;
     html += `<div class="log-line err"><span class="ln">L${a.firstError.line}</span><span class="tx">${esc(a.firstError.text)}</span></div>`;
     if (a.firstError.category) html += `<div class="tag-list"><span class="tag err-tag">${esc(a.firstError.category)}</span></div>`;
   }
@@ -209,36 +586,69 @@ function renderAnalysis(a) {
     html += a.commands.map((c) => `<div class="log-line"><span class="ln">L${c.line}</span><span class="tx">${esc(c.command)}</span></div>`).join('');
   }
 
-  if (a.errors.length && a.verdict !== 'success') {
+  if (a.errors?.length && a.verdict !== 'success') {
     html += `<div class="block-h">Errors (${a.errors.length})</div>`;
     html += a.errors.map((e) => `<div class="log-line err"><span class="ln">L${e.line}</span><span class="tx">${esc(e.text)}${e.category ? `<span class="line-cat">${esc(e.category)}</span>` : ''}</span></div>`).join('');
   }
-  if (a.deprecations.length) {
+  if (a.deprecations?.length) {
     html += `<div class="block-h">Deprecated packages</div><div class="tag-list">${a.deprecations.map((d) => `<span class="tag">${esc(d)}</span>`).join('')}</div>`;
   }
-  if (a.warnings.length && a.verdict !== 'success') {
+  if (a.warnings?.length && a.verdict !== 'success') {
     html += `<div class="block-h">Warnings (${a.warnings.length})</div>`;
     html += a.warnings.slice(0, 15).map((w) => `<div class="log-line warn"><span class="ln">L${w.line}</span><span class="tx">${esc(w.text)}</span></div>`).join('');
   }
 
   lastBugReportText = (!isSuccess && a.bugReport?.hasIssue) ? a.bugReport.copyText : '';
   $('#analyze-out').innerHTML = html;
+
   $('#analyze-out').querySelectorAll('.copy-bug-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(lastBugReportText);
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+        await copyText(lastBugReportText || rootCause);
+        flashBtn(btn, 'Copied!');
       } catch {
-        btn.textContent = 'Copy failed';
+        flashBtn(btn, 'Copy failed');
       }
     });
+  });
+  $('#analyze-out').querySelector('.download-assessment-btn')?.addEventListener('click', (e) => {
+    try {
+      downloadAssessment(a);
+      flashBtn(e.currentTarget, 'Downloaded');
+    } catch {
+      flashBtn(e.currentTarget, 'Failed');
+    }
+  });
+  $('#analyze-out').querySelector('.share-btn')?.addEventListener('click', async (e) => {
+    try {
+      await shareAnalysis(a);
+      flashBtn(e.currentTarget, 'Link copied');
+    } catch {
+      flashBtn(e.currentTarget, 'Share failed');
+    }
   });
 }
 
 function verdictLabel(v) {
   return { success: '✓ Success', failed: '✕ Failed', 'errors-found': '⚠ Errors found', inconclusive: '? Inconclusive' }[v] || v;
 }
+
+function restoreSharedAnalysis() {
+  const m = window.location.hash.match(/share=([A-Za-z0-9_-]+)/);
+  if (!m) return;
+  const map = readJson(SHARE_KEY, {});
+  const payload = map[m[1]];
+  if (!payload?.analysis) return;
+  lastShareId = payload.id;
+  lastLogText = payload.log || '';
+  lastAnalysis = payload.analysis;
+  $('#log-input').value = payload.log || '';
+  renderAnalysis(payload.analysis);
+  setWorkspaceExpanded(true);
+}
+
+restoreSharedAnalysis();
+renderHistory();
 
 // --- QA Knowledge Hub ---
 let lastDigestData = null;

@@ -28,6 +28,7 @@
 
   <nav class="tabs">
     <button class="tab active" data-tab="analyzer">Analyze</button>
+    <button class="tab" data-tab="history">History</button>
     <button class="tab" data-tab="digest">QA Knowledge Hub</button>
   </nav>
 
@@ -37,17 +38,18 @@
         <div class="workspace-headers">
           <div class="panel-head">
             <label class="lbl" for="log-input">Deploy / build log</label>
-            <p class="hint">Paste output from Cloudways, npm, Ansible, Docker, or CI.</p>
+            <p class="hint">Paste, drop a log file, or choose one — Cloudways, npm, Ansible, Docker, CI, Laravel, and more.</p>
           </div>
           <div class="panel-head">
             <span class="lbl">Analysis</span>
-            <p class="hint">Verdict, issues, Jira bug report, timeline, and error categories.</p>
+            <p class="hint">Root cause, suggested fixes, and a downloadable assessment report you can share.</p>
           </div>
         </div>
 
         <div class="workspace-panes" id="workspace-panes">
-          <div class="pane pane-input">
-            <textarea id="log-input" class="mono-input" placeholder="Paste log output here…" spellcheck="false"></textarea>
+          <div class="pane pane-input" id="drop-zone">
+            <div class="drop-overlay" id="drop-overlay" aria-hidden="true">Drop log file to analyze</div>
+            <textarea id="log-input" class="mono-input" placeholder="Paste log output here, or drag & drop a .log / .txt / .json file…" spellcheck="false"></textarea>
           </div>
           <div class="pane pane-output">
             <div id="analyze-out" class="output">
@@ -60,9 +62,24 @@
           <div class="pane-footer">
             <button id="analyze-btn" class="btn-primary">Analyze</button>
             <button id="analyze-clear" class="btn-ghost">Clear</button>
+            <label class="btn-ghost file-btn" for="log-file">Choose file</label>
+            <input id="log-file" type="file" accept=".log,.txt,.json,.out,text/plain,application/json" hidden />
           </div>
           <div class="pane-footer pane-footer-spacer" aria-hidden="true"></div>
         </div>
+      </div>
+    </section>
+
+    <section class="panel" id="tab-history">
+      <div class="history-header">
+        <div>
+          <h2 class="digest-title">Analysis history</h2>
+          <p class="hint">Stored only in this browser on this device (localStorage). Other machines, browsers, and users cannot see it. Click a row to reload.</p>
+        </div>
+        <button type="button" id="history-clear" class="btn-ghost">Clear history</button>
+      </div>
+      <div id="history-out" class="history-out">
+        <div class="placeholder">No analyses yet — run Analyze to start building history.</div>
       </div>
     </section>
 
