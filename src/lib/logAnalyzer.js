@@ -1,6 +1,8 @@
 // Log analyzer engine. Pure functions, no dependencies — fully working.
 // Parses deploy/build/runtime logs and extracts a structured analysis.
 
+const { parseStructuredFailure, noiseSuppressForStructured } = require('./structuredFailures');
+
 const PATTERNS = {
   error: /\b(error|err!|failed|failure|fatal|exception|cannot|not found|no such|denied|refused|timed? ?out)\b/i,
   warning: /\b(warn|warning|deprecated|deprecation)\b/i,
@@ -13,8 +15,12 @@ const PATTERNS = {
   portDetected: /port\s+detected[^\d]*(\d+)/i,
   packagesAdded: /added\s+(\d+)\s+packages?/i,
   buildPhase: /^\[([^\]]+)\]\s*(.+)?$/,
+  cloudwaysPhase: /^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*(.+)$/,
   nodeVersion: /node(?:\.js)?\s+v?(\d+\.\d+\.\d+)/i,
+  nodeVersionInstalled: /Node\.js v(\d+(?:\.\d+)?) installed/i,
+  nodeVersionSwitch: /Switching Node\.js from \d+(?:\.\d+)? to (\d+(?:\.\d+)?)/i,
   npmVersion: /npm\s+v?(\d+\.\d+\.\d+)/i,
+  npmEresolve: /npm error code ERESOLVE|ERESOLVE could not resolve/i,
   command: /^\$\s+(.+)$/,
   httpStatusCtx: /\b(?:HTTP\/[\d.]+\s+|status(?:\s+code)?[:\s=]+|response(?:\s+code)?[:\s=]+|returned\s+)(4\d{2}|5\d{2})\b|\b(4\d{2}|5\d{2})\s+(?:error|not found|internal server error|bad gateway|service unavailable|gateway timeout)\b/i,
   stackTrace: /^\s+at\s+.+\(.+:\d+:\d+\)/,
@@ -35,19 +41,37 @@ const FALSE_POSITIVE_LINE = [
   /PLAY RECAP[\s\S]*failed=0[\s\S]*unreachable=0/i,
   /_ansible_no_log/i,
   /"msg"\s*:\s*"All items completed"/i,
+  /^\s*Status\s*:\s*FAILED\b/i,
 ];
 
+function isPackageManagerNoiseLine(line) {
+  const t = String(line || '').trim();
+  if (/npm error|npm ERR!/i.test(t)) {
+    if (/npm error code |npm ERR! code |ERESOLVE could not resolve|Could not resolve dependency|Conflicting peer dependency|Fix the upstream|missing script|Cannot find module/i.test(t)) {
+      return false;
+    }
+    return true;
+  }
+  if (/^yarn error|^error YN\d+/i.test(t) && !/YN0002|YN0060|doesn't provide|Couldn't find package/i.test(t)) {
+    return /at |node_modules|\.yarn\//i.test(t);
+  }
+  return false;
+}
+
 const ERROR_CATEGORIES = [
-  { id: 'module', label: 'Module / dependency', pattern: /cannot find module|module not found|ERR_MODULE_NOT_FOUND|ENOENT.*node_modules|missing script/i },
+  { id: 'npm-peer-deps', label: 'Package peer dependency conflict', pattern: /ERESOLVE|could not resolve dependency|conflicting peer dependency|YN0002|YN0060|ERR_PNPM_PEER/i },
+  { id: 'ansible', label: 'Ansible', pattern: /TASK\s+\[.+\]\s+\*\*\*\s+FAILED|fatal:\s*\[[^\]]+\]:\s*FAILED|PLAY RECAP.*failed=[1-9]/i },
+  { id: 'jenkins', label: 'Jenkins / CI', pattern: /Finished:\s*FAILURE|hudson\.|\[Pipeline\]|##\[error\]|ERROR: Job failed/i },
+  { id: 'module', label: 'Module / dependency', pattern: /cannot find module|module not found|ERR_MODULE_NOT_FOUND|ENOENT.*node_modules|missing script|Couldn't find package/i },
   { id: 'network', label: 'Network / connection', pattern: /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|socket hang up|fetch failed|getaddrinfo|network error/i },
-  { id: 'permission', label: 'Permission / auth', pattern: /EACCES|permission denied|unauthorized|forbidden|\b401\b|\b403\b/i },
+  { id: 'permission', label: 'Permission / auth', pattern: /EACCES|permission denied|unauthorized|forbidden|\b401\b|\b403\b|E401|E403/i },
   { id: 'memory', label: 'Memory / resource', pattern: /ENOMEM|out of memory|heap out of memory|JavaScript heap/i },
-  { id: 'build', label: 'Build / compile', pattern: /build failed|compilation failed|syntax error|Transform failed|Rollup failed|webpack.*error/i },
-  { id: 'database', label: 'Database', pattern: /SQL|postgres|mysql|mongodb|sequelize|prisma|ER_[A-Z_]+|connection.*5432|connection.*3306/i },
+  { id: 'build', label: 'Build / compile', pattern: /build failed|compilation failed|syntax error|Transform failed|Rollup failed|webpack.*error|ELIFECYCLE/i },
+  { id: 'database', label: 'Database', pattern: /SQL|postgres|mysql|mongodb|sequelize|prisma|ER_[A-Z_]+|connection.*5432|connection.*3306|MongoNetworkError/i },
   { id: 'port', label: 'Port / binding', pattern: /EADDRINUSE|address already in use|port.*in use/i },
-  { id: 'timeout', label: 'Timeout', pattern: /timed? out|timeout exceeded/i },
-  { id: 'docker', label: 'Container', pattern: /docker|container exited|OCI runtime|kubectl/i },
-  { id: 'ssl', label: 'SSL / TLS', pattern: /SSL|TLS|certificate|cert has expired|UNABLE_TO_VERIFY/i },
+  { id: 'timeout', label: 'Timeout', pattern: /timed? out|timeout exceeded|ETIMEDOUT/i },
+  { id: 'docker', label: 'Container', pattern: /docker|container exited|OCI runtime|kubectl|failed to solve|pull access denied/i },
+  { id: 'ssl', label: 'SSL / TLS', pattern: /SSL|TLS|certificate|cert has expired|UNABLE_TO_VERIFY|CERT_HAS_EXPIRED/i },
 ];
 
 function detectPackageManager(text) {
@@ -70,10 +94,11 @@ function detectFramework(text) {
 
 function detectLogSource(text) {
   if (/ansible|PLAY \[/i.test(text)) return 'Ansible';
+  if (/jenkins|hudson\.|\[Pipeline\]|Finished:\s*(FAILURE|SUCCESS|ABORTED)/i.test(text)) return 'Jenkins';
   if (/cloudways|cw-app|application deployment/i.test(text)) return 'Cloudways';
   if (/github actions|##\[group\]|workflow run/i.test(text)) return 'GitHub Actions';
-  if (/gitlab-ci|CI_JOB_/i.test(text)) return 'GitLab CI';
-  if (/docker|containerd|OCI runtime/i.test(text)) return 'Docker';
+  if (/gitlab-ci|CI_JOB_|ERROR: Job failed/i.test(text)) return 'GitLab CI';
+  if (/docker|containerd|OCI runtime|Dockerfile/i.test(text)) return 'Docker';
   if (/nginx|upstream timed out/i.test(text)) return 'Nginx';
   if (/pm2|PM2/i.test(text)) return 'PM2';
   if (/vercel|netlify|heroku/i.test(text)) return 'PaaS';
@@ -221,19 +246,31 @@ function dedupeIssues(issues) {
 function buildIssues({ text, lines, errors, summary, failedPhase, exitCode }) {
   const issues = [];
 
+  // Ansible task list (may include multiple); structured primary may also be Ansible.
   issues.push(...parseAnsibleIssues(text, lines));
 
-  for (const err of errors) {
-    const exact = extractExactMessage(err.text);
-    issues.push({
-      title: `${err.category}: ${exact.slice(0, 100)}`,
-      exactMessage: exact,
-      line: err.line,
-      category: err.category,
-      categoryId: err.categoryId,
-      excerpt: err.text,
-      investigation: investigationForCategory(err.categoryId, exact),
+  const structured = parseStructuredFailure(text, lines, { errors, exitCode, failedPhase });
+  if (structured) {
+    // Prefer a single structured assessment as the primary issue.
+    const withoutDupAnsible = issues.filter((i) => {
+      if (!structured.categoryId || structured.categoryId !== 'ansible') return true;
+      return i.categoryId !== 'ansible';
     });
+    issues.length = 0;
+    issues.push(structured, ...withoutDupAnsible);
+  } else {
+    for (const err of errors.slice(0, 15)) {
+      const exact = extractExactMessage(err.text);
+      issues.push({
+        title: `${err.category}: ${exact.slice(0, 100)}`,
+        exactMessage: exact,
+        line: err.line,
+        category: err.category,
+        categoryId: err.categoryId,
+        excerpt: err.text,
+        investigation: investigationForCategory(err.categoryId, exact),
+      });
+    }
   }
 
   if (exitCode !== null && exitCode !== 0 && !issues.length) {
@@ -246,13 +283,6 @@ function buildIssues({ text, lines, errors, summary, failedPhase, exitCode }) {
       excerpt: lines.find((l) => /exit[_ ]?code/i.test(l)) || `Process terminated with exit code ${exitCode}`,
       investigation: ['Review the last command output before exit', 'Re-run the same command locally to reproduce'],
     });
-  }
-
-  if (failedPhase && !issues.some((i) => i.line === failedPhase.line)) {
-    const nearError = errors.find((e) => e.line >= failedPhase.line - 5);
-    if (nearError) {
-      // already covered by error issue
-    }
   }
 
   if (summary.vulnerabilityBreakdown?.high > 0 || summary.vulnerabilityBreakdown?.critical > 0) {
@@ -273,6 +303,27 @@ function buildIssues({ text, lines, errors, summary, failedPhase, exitCode }) {
 
 function investigationForCategory(categoryId, message) {
   const map = {
+    'npm-peer-deps': [
+      'Compare package.json versions with the peer requirements shown in the conflict',
+      'Run install locally with the same Node version as deploy',
+      'Commit an updated lockfile after install succeeds',
+      'Use --legacy-peer-deps only as a temporary workaround',
+    ],
+    ansible: [
+      'Open the first TASK [...] *** FAILED *** block',
+      'Re-run ansible with -vvv on the failing task',
+      'Verify inventory host vars and become/sudo settings',
+    ],
+    jenkins: [
+      'Open the failing Jenkins stage console log',
+      'Reproduce the stage command on the same agent image',
+      'Compare with the last green build',
+    ],
+    ci: [
+      'Open the failed CI job step',
+      'Reproduce the script locally',
+      'Verify CI secrets and runner environment',
+    ],
     module: ['Run npm install / pnpm install from a clean node_modules', 'Verify the missing package is listed in package.json', 'Check CI cache is not stale'],
     network: ['Verify the target URL/host is reachable from the deploy environment', 'Check DNS, firewall, and proxy settings', 'Confirm the upstream service is running'],
     permission: ['Verify credentials and API tokens in CI/deploy secrets', 'Check file/folder permissions on the target path', 'Confirm the service account has required roles'],
@@ -283,13 +334,57 @@ function investigationForCategory(categoryId, message) {
     timeout: ['Increase timeout settings for the failing request/build step', 'Check if upstream service is slow or unavailable', 'Add retries for transient network failures'],
     docker: ['Inspect container logs (docker logs <id>)', 'Verify image tag and Dockerfile build args', 'Check volume mounts and entrypoint command'],
     ssl: ['Renew or reinstall the TLS certificate', 'Verify certificate chain and intermediate certs', 'Confirm system clock is correct'],
-    ansible: ['Re-run ansible with -vvv on the failing task', 'Verify inventory host vars and become/sudo settings'],
   };
   return map[categoryId] || ['Review the exact log line and reproduce the failing command locally', 'Compare with the last successful deploy log'];
 }
 
-function buildBugReport({ verdict, verdictReason, summary, issues, failedPhase }) {
+function buildBugReport({ verdict, verdictReason, summary, issues, failedPhase, failureDetail }) {
   const blocking = issues.filter((i) => !isAdvisoryIssue(i));
+
+  if (failureDetail) {
+    const envLines = [
+      `- Log source: ${summary.logSource}`,
+      `- Environment: ${summary.environment}`,
+      summary.framework !== 'unknown' ? `- Framework: ${summary.framework}` : null,
+      summary.packageManager !== 'unknown' ? `- Package manager: ${summary.packageManager}` : null,
+      summary.nodeVersion ? `- Node: ${summary.nodeVersion}` : null,
+      summary.exitCode !== null ? `- Exit code: ${summary.exitCode}` : null,
+      failureDetail.failedPhase ? `- Failed phase: ${failureDetail.failedPhase}` : null,
+      failureDetail.failedCommand ? `- Failed command: ${failureDetail.failedCommand}` : null,
+    ].filter(Boolean);
+
+    const detailLines = (failureDetail.details && failureDetail.details.length)
+      ? ['', '## Failure details', ...failureDetail.details.map((d) => `- ${d.label}: ${d.value}`)]
+      : (failureDetail.conflict ? [
+        '',
+        '## Dependency conflict',
+        failureDetail.conflict.installed ? `- Installed: ${failureDetail.conflict.installed}${failureDetail.conflict.installedFrom ? ` (${failureDetail.conflict.installedFrom})` : ''}` : null,
+        failureDetail.conflict.requiredBy ? `- Required by: ${failureDetail.conflict.requiredBy}` : null,
+        failureDetail.conflict.requiredRange ? `- Peer requirement: ${failureDetail.conflict.requiredRange}` : null,
+        failureDetail.conflict.wouldInstall ? `- Would install: ${failureDetail.conflict.wouldInstall}` : null,
+      ].filter(Boolean) : []);
+
+    const body = [
+      '## Summary',
+      failureDetail.headline,
+      '',
+      '## What happened',
+      failureDetail.description,
+      '',
+      '## Environment',
+      ...envLines,
+      ...detailLines,
+      '',
+      '## Recommended fixes',
+      ...failureDetail.resolution.map((step, i) => `${i + 1}. ${step}`),
+      '',
+      '## Steps to investigate',
+      ...(blocking[0]?.investigation || []).map((step, i) => `${i + 1}. ${step}`),
+    ];
+
+    const copyText = body.join('\n');
+    return { summary: failureDetail.headline, body: copyText, copyText, hasIssue: true };
+  }
 
   if (!blocking.length) {
     if (verdict === 'success') {
@@ -391,9 +486,22 @@ function hasBlockingIssues(issues) {
   return issues.some((issue) => !isAdvisoryIssue(issue));
 }
 
-function buildInsights({ verdict, summary, errorCategories, firstError, failedPhase, deprecations, issues }) {
+function buildInsights({ verdict, summary, errorCategories, firstError, failedPhase, deprecations, issues, failureDetail }) {
   const insights = [];
   const blocking = (issues || []).filter((i) => !isAdvisoryIssue(i));
+
+  if (failureDetail?.details?.length) {
+    const summaryBits = failureDetail.details.slice(0, 3).map((d) => `${d.label}: ${d.value}`).join(' · ');
+    if (summaryBits) insights.push({ level: 'error', text: summaryBits });
+  } else if (failureDetail?.conflict?.installed && failureDetail.conflict.requiredBy) {
+    insights.push({
+      level: 'error',
+      text: `Installed ${failureDetail.conflict.installed}, but ${failureDetail.conflict.requiredBy} requires ${failureDetail.conflict.requiredRange || 'a newer peer version'}.`,
+    });
+  }
+  if (failureDetail?.failedCommand) {
+    insights.push({ level: 'info', text: `Failed during \`${failureDetail.failedCommand}\`${failureDetail.failedPhase ? ` in the "${failureDetail.failedPhase}" step` : ''}.` });
+  }
 
   if (blocking.length) {
     insights.push({ level: 'error', text: blocking[0].title });
@@ -416,6 +524,9 @@ function buildInsights({ verdict, summary, errorCategories, firstError, failedPh
   }
   if (deprecations.length > 0) {
     insights.push({ level: 'warn', text: `${deprecations.length} deprecated package(s) — plan upgrades to avoid future breakage.` });
+  }
+  if (errorCategories.find((c) => c.id === 'npm-peer-deps')) {
+    insights.push({ level: 'error', text: 'npm peer dependency conflict — align package versions in package.json instead of ignoring with --legacy-peer-deps.' });
   }
   if (errorCategories.find((c) => c.id === 'module')) {
     insights.push({ level: 'error', text: 'Missing module detected — verify package.json dependencies and run a clean install.' });
@@ -466,6 +577,8 @@ function analyzeLog(raw) {
   let nodeVersion = null;
   let npmVersion = null;
 
+  const suppressNoise = noiseSuppressForStructured(text);
+
   lines.forEach((line, i) => {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -491,6 +604,12 @@ function analyzeLog(raw) {
     const nv = trimmed.match(PATTERNS.nodeVersion);
     if (nv && !nodeVersion) nodeVersion = nv[1];
 
+    const nvInstalled = trimmed.match(PATTERNS.nodeVersionInstalled);
+    if (nvInstalled && !nodeVersion) nodeVersion = nvInstalled[1];
+
+    const nvSwitch = trimmed.match(PATTERNS.nodeVersionSwitch);
+    if (nvSwitch && !nodeVersion) nodeVersion = nvSwitch[1];
+
     const npmv = trimmed.match(PATTERNS.npmVersion);
     if (npmv && !npmVersion) npmVersion = npmv[1];
 
@@ -508,7 +627,7 @@ function analyzeLog(raw) {
         phaseLabel = phaseText;
         phaseText = '';
       }
-      if (phaseLabel && !/^\d/.test(phaseLabel) && !/^(exit[_ ]?code|status)\b/i.test(phaseLabel)) {
+      if (phaseLabel && !/^\d/.test(phaseLabel) && !/^(exit[_ ]?code|status)\b/i.test(phaseLabel) && !/^stderr$/i.test(phaseLabel)) {
         phases.push({
           line: i + 1,
           phase: phaseLabel,
@@ -518,10 +637,24 @@ function analyzeLog(raw) {
       }
     }
 
+    const cwPhase = trimmed.match(PATTERNS.cloudwaysPhase);
+    if (cwPhase) {
+      const phaseLabel = cwPhase[2].trim();
+      if (phaseLabel && !/^(exit[_ ]?code|status)\b/i.test(phaseLabel)) {
+        phases.push({
+          line: i + 1,
+          phase: phaseLabel,
+          text: '',
+          timestamp: cwPhase[1].trim(),
+        });
+      }
+    }
+
     if (PATTERNS.stackTrace.test(trimmed)) stackTraceLines += 1;
 
     const isDep = PATTERNS.warning.test(trimmed) && /deprecat/i.test(trimmed);
     if (PATTERNS.error.test(trimmed) && !isDep && !isFalsePositiveLine(trimmed)) {
+      if (suppressNoise && isPackageManagerNoiseLine(trimmed)) return;
       const category = categorizeError(trimmed);
       categoryCounts.set(category.id, (categoryCounts.get(category.id) || 0) + 1);
       errors.push({ line: i + 1, text: trimmed.slice(0, 300), category: category.label, categoryId: category.id });
@@ -579,13 +712,43 @@ function analyzeLog(raw) {
     exitCode,
   });
 
+  const failureDetail = issues.find((i) => i.failureDetail)?.failureDetail || null;
+  const primaryIssue = issues.find((i) => !isAdvisoryIssue(i)) || null;
+
+  if (failureDetail?.failedPhase) {
+    const phaseLine = lines.findIndex((l) => l.includes(failureDetail.failedPhase)) + 1;
+    failedPhase = {
+      line: phaseLine > 0 ? phaseLine : (primaryIssue?.line || 1),
+      phase: failureDetail.failedPhase,
+      text: failureDetail.failedCommand || '',
+      timestamp: null,
+    };
+  } else if (!failedPhase && primaryIssue?.line && phases.length) {
+    failedPhase = [...phases].reverse().find((p) => p.line <= primaryIssue.line) || phases[phases.length - 1];
+  }
+
+  const resolvedFirstError = firstError || (primaryIssue ? {
+    line: primaryIssue.line,
+    text: String(primaryIssue.excerpt || primaryIssue.exactMessage).slice(0, 300),
+    category: primaryIssue.category,
+    categoryId: primaryIssue.categoryId,
+  } : null);
+
+  const resolvedErrorCategories = errorCategories.length
+    ? errorCategories
+    : (primaryIssue?.categoryId ? [{
+      id: primaryIssue.categoryId,
+      label: primaryIssue.category,
+      count: 1,
+    }] : errorCategories);
+
   let verdict;
   let verdictReason;
   const buildSucceeded = exitCode === 0 || ansibleSuccess || PATTERNS.success.test(text);
 
   if (exitCode !== null && exitCode !== 0) {
     verdict = 'failed';
-    verdictReason = issues[0]?.exactMessage || `Process exited with code ${exitCode}`;
+    verdictReason = failureDetail?.headline || issues[0]?.title || issues[0]?.exactMessage || `Process exited with code ${exitCode}`;
   } else if (buildSucceeded) {
     verdict = 'success';
     if (ansibleSuccess) verdictReason = 'Ansible tasks completed successfully';
@@ -596,7 +759,8 @@ function analyzeLog(raw) {
     }
   } else if (hasBlockingIssues(issues)) {
     verdict = 'failed';
-    verdictReason = issues.find((i) => !isAdvisoryIssue(i)).exactMessage || issues[0].title;
+    const primary = issues.find((i) => !isAdvisoryIssue(i));
+    verdictReason = failureDetail?.headline || primary?.title || primary?.exactMessage || 'Failure detected';
   } else if (errors.length > 0 && exitCode === null) {
     verdict = 'errors-found';
     verdictReason = `${errors.length} error-like line(s) detected, no explicit exit code`;
@@ -610,7 +774,7 @@ function analyzeLog(raw) {
 
   const summary = {
     totalLines: lines.filter((l) => l.trim()).length,
-    errors: errors.length,
+    errors: failureDetail ? 1 : errors.length,
     warnings: warnings.length,
     deprecations: deprecations.size,
     exitCode,
@@ -634,14 +798,15 @@ function analyzeLog(raw) {
   const insights = buildInsights({
     verdict,
     summary,
-    errorCategories,
-    firstError,
+    errorCategories: resolvedErrorCategories,
+    firstError: resolvedFirstError,
     failedPhase,
     deprecations: [...deprecations],
     issues,
+    failureDetail,
   });
 
-  const bugReport = buildBugReport({ verdict, verdictReason, summary, issues, failedPhase });
+  const bugReport = buildBugReport({ verdict, verdictReason, summary, issues, failedPhase, failureDetail });
 
   return {
     verdict,
@@ -650,6 +815,7 @@ function analyzeLog(raw) {
     insights,
     issues,
     bugReport,
+    failureDetail,
     firstError: (() => {
       const blocking = issues.filter((i) => !isAdvisoryIssue(i));
       if (blocking[0]) {
@@ -659,11 +825,18 @@ function analyzeLog(raw) {
           category: blocking[0].category,
         };
       }
-      return verdict === 'success' ? null : firstError;
+      return verdict === 'success' ? null : resolvedFirstError;
     })(),
     failedPhase: failedPhase ? { phase: failedPhase.phase, line: failedPhase.line } : null,
-    errorCategories,
-    errors: errors.slice(0, 50),
+    errorCategories: resolvedErrorCategories,
+    errors: (failureDetail && primaryIssue)
+      ? [{
+        line: primaryIssue.line,
+        text: String(primaryIssue.excerpt || primaryIssue.exactMessage).slice(0, 300),
+        category: primaryIssue.category,
+        categoryId: primaryIssue.categoryId,
+      }]
+      : errors.slice(0, 50),
     warnings: warnings.slice(0, 50),
     deprecations: [...deprecations],
     phases: phasesWithDuration.slice(0, 50),

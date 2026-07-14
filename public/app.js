@@ -87,6 +87,35 @@ function renderAnalysis(a) {
       <span class="verdict-reason">${esc(a.verdictReason)}</span>
     </div>`;
 
+  if (!isSuccess && a.failureDetail) {
+    const fd = a.failureDetail;
+    html += `<div class="failure-detail-box">`;
+    html += `<div class="block-h">What failed</div>`;
+    html += `<div class="failure-headline">${esc(fd.headline)}</div>`;
+    if (fd.description) html += `<p class="failure-desc">${esc(fd.description)}</p>`;
+    const detailRows = (fd.details && fd.details.length)
+      ? fd.details
+      : [
+          fd.conflict?.installed && { label: 'Installed', value: `${fd.conflict.installed}${fd.conflict.installedFrom ? ` (${fd.conflict.installedFrom})` : ''}` },
+          fd.conflict?.requiredBy && { label: 'Required by', value: `${fd.conflict.requiredBy}${fd.conflict.requiredRange ? ` needs ${fd.conflict.requiredRange}` : ''}` },
+          fd.conflict?.wouldInstall && { label: 'Would install', value: fd.conflict.wouldInstall },
+          fd.failedPhase && { label: 'Failed phase', value: fd.failedPhase },
+          fd.failedCommand && { label: 'Command', value: fd.failedCommand },
+        ].filter(Boolean);
+    if (detailRows.length) {
+      html += `<div class="failure-conflict">`;
+      detailRows.forEach((row) => {
+        html += `<div><span class="failure-label">${esc(row.label)}</span> ${esc(row.value)}</div>`;
+      });
+      html += `</div>`;
+    }
+    if (fd.resolution?.length) {
+      html += `<div class="block-h">Recommended fixes</div>`;
+      html += `<ol class="resolution-list">${fd.resolution.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`;
+    }
+    html += `</div>`;
+  }
+
   if (!isSuccess && a.bugReport?.hasIssue) {
     html += `
       <div class="bug-report-box">
@@ -99,7 +128,7 @@ function renderAnalysis(a) {
       </div>`;
   }
 
-  if (!isSuccess && a.issues?.length) {
+  if (!isSuccess && a.issues?.length && !a.failureDetail) {
     html += `<div class="block-h">Detected issues (${a.issues.length})</div>`;
     html += a.issues.slice(0, 5).map((issue) => `
       <div class="issue-card">
@@ -107,6 +136,9 @@ function renderAnalysis(a) {
         ${issue.line ? `<div class="issue-meta">Line ${issue.line} · ${esc(issue.category)}</div>` : ''}
         <div class="issue-msg">${esc(issue.exactMessage)}</div>
       </div>`).join('');
+  } else if (!isSuccess && a.issues?.length && a.failureDetail && a.issues[0]?.investigation?.length) {
+    html += `<div class="block-h">Investigation steps</div>`;
+    html += `<ol class="resolution-list">${a.issues[0].investigation.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`;
   }
 
   if (!isSuccess && a.insights?.length) {
