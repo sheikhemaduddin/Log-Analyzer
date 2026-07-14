@@ -82,6 +82,7 @@ function detectPackageManager(text) {
 }
 
 function detectFramework(text) {
+  if (/Illuminate\\|Laravel\\|/i.test(text) || /artisan|MixpanelListener|CallQueuedListener/i.test(text)) return 'Laravel';
   if (/next build|\.next|next start/i.test(text)) return 'Next.js';
   if (/vinxi|@tanstack\/(react-)?start/i.test(text)) return 'TanStack Start';
   if (/vite build|vite v\d/i.test(text)) return 'Vite';
@@ -95,6 +96,7 @@ function detectFramework(text) {
 function detectLogSource(text) {
   if (/ansible|PLAY \[/i.test(text)) return 'Ansible';
   if (/jenkins|hudson\.|\[Pipeline\]|Finished:\s*(FAILURE|SUCCESS|ABORTED)/i.test(text)) return 'Jenkins';
+  if (/horizon|CallQueuedListener|"queue"\s*:\s*"|"job_class"\s*:/i.test(text)) return 'Laravel Horizon';
   if (/cloudways|cw-app|application deployment/i.test(text)) return 'Cloudways';
   if (/github actions|##\[group\]|workflow run/i.test(text)) return 'GitHub Actions';
   if (/gitlab-ci|CI_JOB_|ERROR: Job failed/i.test(text)) return 'GitLab CI';

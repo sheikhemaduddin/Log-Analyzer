@@ -767,9 +767,154 @@ function parseJenkinsStructured(text, lines) {
   });
 }
 
+// --- Laravel / Horizon / JSON application logs ----------------------------
+
+function extractQuotedField(text, key) {
+  const re = new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`, 'i');
+  const m = text.match(re);
+  if (!m) return null;
+  return m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+}
+
+function extractNumericField(text, key) {
+  const m = text.match(new RegExp(`"${key}"\\s*:\\s*(\\d+)`, 'i'));
+  return m ? m[1] : null;
+}
+
+function parseLaravelAppStructured(text, lines) {
+  const looksLaravel = /Illuminate\\|Laravel\\|/i.test(text)
+    || /"job_class"\s*:|"level_name"\s*:\s*"ERROR"|"channel"\s*:/i.test(text)
+    || /MixpanelListener|CallQueuedListener|horizon/i.test(text)
+    || /cURL error \d+/i.test(text);
+
+  if (!looksLaravel) return null;
+
+  const curl = text.match(/cURL error\s+(\d+):\s*([^"\\]+)/i);
+  const connect = text.match(/Failed to connect to\s+(\S+)\s+port\s+(\d+)[^\n"]{0,80}/i);
+  const url = text.match(/\bfor\s+(https?:\/\/[^\s"'\\]+)/i)?.[1]
+    || extractQuotedField(text, 'url');
+  const message = extractQuotedField(text, 'message')
+    || text.match(/(?:^|[\\"{,])\s*((?:F?ailed to send|Unable to|Error)[^"\\]{8,120})/i)?.[1]
+    || null;
+  const jobClass = extractQuotedField(text, 'job_class');
+  const queue = extractQuotedField(text, 'queue');
+  const eventName = extractQuotedField(text, 'event_name');
+  const error = extractQuotedField(text, 'error') || (curl ? curl[0].slice(0, 300) : null);
+  const errorFile = extractQuotedField(text, 'error_file');
+  const errorLine = extractNumericField(text, 'error_line');
+  const jobId = extractQuotedField(text, 'job_id');
+  const level = extractQuotedField(text, 'level_name') || extractNumericField(text, 'level');
+
+  if (!curl && !connect && !error && !jobClass && !/level_name"\s*:\s*"ERROR"/i.test(text)) {
+    return null;
+  }
+
+  const host = connect?.[1] || url?.replace(/^https?:\/\//, '').split(/[:/]/)[0] || null;
+  const port = connect?.[2] || (url?.match(/:(\d+)/)?.[1]) || null;
+  const curlCode = curl?.[1] || null;
+
+  let headline;
+  if (curlCode === '7' && host) {
+    headline = `Laravel queue job failed: cannot reach ${host}${port ? `:${port}` : ''} (cURL error 7)`;
+  } else if (curlCode) {
+    headline = `Laravel HTTP client failed: cURL error ${curlCode}`;
+  } else if (message) {
+    headline = `Laravel error: ${message.replace(/^ailed\b/i, 'Failed').slice(0, 140)}`;
+  } else {
+    headline = 'Laravel application / queue job failed';
+  }
+
+  const descriptionParts = [
+    message && `Job reported: ${message.replace(/^ailed\b/i, 'Failed')}.`,
+    error && `Underlying error: ${error}.`,
+    host && `The worker could not connect to service "${host}"${port ? ` on port ${port}` : ''}.`,
+    queue && `Queue: ${queue}.`,
+    jobClass && `Listener/job: ${jobClass}.`,
+  ].filter(Boolean);
+
+  const resolution = [];
+  if (curlCode === '7' || /Could not connect to server|Connection refused|Failed to connect/i.test(text)) {
+    resolution.push(
+      host
+        ? `Verify "${host}" is running and reachable from the app/queue worker network (same k8s namespace / Docker network / VPC).`
+        : 'Verify the target HTTP service is running and reachable from the queue worker.',
+    );
+    resolution.push('Check service DNS name, port, and readiness probes — cURL 7 means TCP connect failed, not an HTTP 4xx/5xx.');
+    resolution.push('Confirm the EventService / Mixpanel endpoint URL in env config matches the live service address.');
+    resolution.push('From the worker pod/host, test: curl -v http://' + (host || 'SERVICE') + (port ? `:${port}` : '') + '/');
+  } else {
+    resolution.push('Inspect the error message and stack from the Laravel JSON log context.');
+    resolution.push('Reproduce by dispatching the same queued listener/job in the same environment.');
+  }
+  if (queue) resolution.push(`Check Horizon/queue worker health for the "${queue}" queue (failed jobs, timeouts, connection).`);
+
+  return makeIssue({
+    type: curlCode ? `laravel-curl-${curlCode}` : 'laravel-app-error',
+    categoryId: 'network',
+    category: curlCode ? 'HTTP / service connectivity' : 'Laravel application error',
+    headline,
+    description: descriptionParts.join(' ') || 'Laravel logged an ERROR while processing a queued job or HTTP request.',
+    line: lineNo(lines, (l) => /cURL error|Failed to connect|"level_name"\s*:\s*"ERROR"|ailed to send/i.test(l)) || 1,
+    excerpt: (error || message || text).slice(0, 400),
+    failedPhase: queue ? `queue:${queue}` : (jobClass || 'Laravel job'),
+    details: [
+      level && { label: 'Level', value: String(level) },
+      message && { label: 'Message', value: message.replace(/^ailed\b/i, 'Failed').slice(0, 200) },
+      eventName && { label: 'Event', value: eventName },
+      jobClass && { label: 'Job / listener', value: jobClass },
+      queue && { label: 'Queue', value: queue },
+      jobId && { label: 'Job ID', value: jobId },
+      host && { label: 'Target host', value: host },
+      port && { label: 'Port', value: port },
+      url && { label: 'URL', value: url },
+      curlCode && { label: 'cURL code', value: curlCode },
+      error && { label: 'Error', value: error.slice(0, 260) },
+      errorFile && { label: 'Error file', value: `${errorFile}${errorLine ? `:${errorLine}` : ''}` },
+    ].filter(Boolean),
+    resolution,
+    investigation: [
+      'Confirm the target service container/pod is up (eventservice / dependency)',
+      'Compare worker network with the service DNS name in the error URL',
+      'Retry the Horizon failed job after the service is healthy',
+    ],
+  });
+}
+
 // --- Runtime / generic structured ----------------------------------------
 
 function parseRuntimeStructured(text, lines) {
+  const curlEarly = text.match(/cURL error\s+(\d+)/i);
+  if (curlEarly && /Failed to connect|Could not connect|Connection refused/i.test(text)) {
+    // Prefer Laravel parser when job context exists; otherwise handle bare cURL.
+    if (!/"job_class"|MixpanelListener|Illuminate\\/i.test(text)) {
+      const connect = text.match(/Failed to connect to\s+(\S+)\s+port\s+(\d+)/i);
+      const host = connect?.[1];
+      const port = connect?.[2];
+      return makeIssue({
+        type: `curl-error-${curlEarly[1]}`,
+        categoryId: 'network',
+        category: 'HTTP / service connectivity',
+        headline: host
+          ? `cURL error ${curlEarly[1]}: cannot connect to ${host}${port ? `:${port}` : ''}`
+          : `cURL error ${curlEarly[1]}: connection failed`,
+        description: (text.match(/cURL error\s+\d+:\s*[^"\\]+/i)?.[0] || 'Outbound HTTP connection failed.').slice(0, 300),
+        line: lineNo(lines, (l) => /cURL error/i.test(l)) || 1,
+        excerpt: findLine(lines, /cURL error/i) || text.slice(0, 300),
+        details: [
+          host && { label: 'Host', value: host },
+          port && { label: 'Port', value: port },
+          { label: 'cURL code', value: curlEarly[1] },
+        ].filter(Boolean),
+        resolution: [
+          'Verify the target host/service is running and listening on that port',
+          'Check DNS, firewall, and that the client is on the correct network/namespace',
+          'curl -v the URL from the same machine/pod that produced the log',
+        ],
+        investigation: ['Confirm service discovery name', 'Check recent deploys of the target service'],
+      });
+    }
+  }
+
   const oom = findLine(lines, /heap out of memory|JavaScript heap|ENOMEM|out of memory|Killed/i);
   if (oom) {
     return makeIssue({
@@ -945,6 +1090,7 @@ function parseStructuredFailure(text, lines, ctx = {}) {
     parseAnsibleStructured,
     parseDockerStructured,
     parseJenkinsStructured,
+    parseLaravelAppStructured,
     parseRuntimeStructured,
   ];
 
