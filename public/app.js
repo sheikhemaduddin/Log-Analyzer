@@ -793,7 +793,7 @@ function renderAnalysis(a) {
       ${!isSuccess && a.bugReport?.hasIssue ? '<button type="button" class="btn-ghost btn-sm copy-bug-btn">Copy report</button>' : ''}
     </div>
     <div class="verdict ${a.verdict}">
-      <span>${verdictLabel(a.verdict)}</span>
+      <span class="verdict-label">${verdictLabel(a.verdict)}</span>
       <span class="verdict-reason">${esc(a.verdictReason)}</span>
     </div>`;
 

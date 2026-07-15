@@ -182,12 +182,35 @@ body { background: var(--bg); color: var(--ink); font-family: var(--sans); min-h
 .placeholder { color: var(--ink-faint); font-family: var(--mono); font-size: 0.82rem; text-align: center; padding: 1rem; }
 
 /* Verdict banner */
-.verdict { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 0.9rem; border-radius: 8px; font-weight: 600; margin-bottom: 1rem; font-size: 0.9rem; }
+.verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
 .verdict.success { background: rgba(61,220,151,0.12); color: var(--ok); }
 .verdict.failed { background: rgba(255,107,107,0.12); color: var(--err); }
 .verdict.errors-found { background: rgba(255,181,71,0.12); color: var(--warn); }
 .verdict.inconclusive { background: var(--panel-2); color: var(--ink-dim); }
-.verdict-reason { font-weight: 400; color: var(--ink-dim); font-size: 0.8rem; }
+.verdict-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+.verdict-reason {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 400;
+  color: var(--ink-dim);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 /* Summary stats grid */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 0.5rem; margin-bottom: 1rem; }
