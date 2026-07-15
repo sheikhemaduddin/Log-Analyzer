@@ -520,12 +520,19 @@ function buildInsights({ verdict, summary, errorCategories, firstError, failedPh
   if (firstError && !issues?.length) {
     insights.push({ level: 'error', text: `First error at line ${firstError.line} (${firstError.category}): ${extractExactMessage(firstError.text)}` });
   }
-  if (summary.vulnerabilityBreakdown?.high > 0 || summary.vulnerabilityBreakdown?.critical > 0) {
-    const { high, critical } = summary.vulnerabilityBreakdown;
-    insights.push({ level: 'warn', text: `${high + critical} high/critical npm vulnerability(ies) — run npm audit and upgrade affected packages before production.` });
+  const vulnTotal = summary.vulnerabilityBreakdown?.total ?? summary.vulnerabilities;
+  if (vulnTotal > 0) {
+    const { high = 0, critical = 0, moderate = 0, low = 0 } = summary.vulnerabilityBreakdown || {};
+    const detail = summary.vulnerabilityBreakdown
+      ? `${critical} critical, ${high} high, ${moderate} moderate, ${low} low`
+      : `${vulnTotal} total`;
+    insights.push({
+      level: (high + critical) > 0 ? 'warn' : 'info',
+      text: `${vulnTotal} npm vulnerability(ies) detected (${detail}) — click to jump to vulnerability lines in the log.`,
+    });
   }
   if (deprecations.length > 0) {
-    insights.push({ level: 'warn', text: `${deprecations.length} deprecated package(s) — plan upgrades to avoid future breakage.` });
+    insights.push({ level: 'warn', text: `${deprecations.length} deprecated package(s) — click to jump to deprecation warnings in the log.` });
   }
   if (errorCategories.find((c) => c.id === 'npm-peer-deps')) {
     insights.push({ level: 'error', text: 'npm peer dependency conflict — align package versions in package.json instead of ignoring with --legacy-peer-deps.' });

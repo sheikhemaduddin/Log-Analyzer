@@ -10,6 +10,10 @@ let lastBugReportText = '';
 let lastAnalysis = null;
 let lastLogText = '';
 let lastShareId = null;
+let logEditMode = true;
+let searchMatchLines = [];
+let searchMatchIndex = -1;
+let jumpClearTimer = null;
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -159,9 +163,308 @@ function flashBtn(btn, label = 'Done!') {
   setTimeout(() => { btn.textContent = prev; }, 1600);
 }
 
+function getLogText() {
+  return $('#log-input')?.value || lastLogText || '';
+}
+
+function setLogEditMode(editing) {
+  logEditMode = editing;
+  const ta = $('#log-input');
+  const lines = $('#log-lines');
+  const btn = $('#log-edit-toggle');
+  if (!ta || !lines) return;
+  if (editing) {
+    ta.classList.remove('is-hidden');
+    lines.hidden = true;
+    if (btn) btn.textContent = 'View lines';
+  } else {
+    ta.classList.add('is-hidden');
+    lines.hidden = false;
+    if (btn) btn.textContent = 'Edit';
+    renderLogLines();
+  }
+}
+
+function markedLineSet(a) {
+  const errors = new Set();
+  const warns = new Set();
+  const vulns = new Set();
+  const deps = new Set();
+  const text = getLogText();
+  const rows = text.split(/\n/);
+  rows.forEach((line, idx) => {
+    const n = idx + 1;
+    if (/vulnerabilit/i.test(line) || /\b(low|moderate|high|critical)\b.*\b\d+\b/i.test(line) && /vuln|severity/i.test(line)) {
+      vulns.add(n);
+      warns.add(n);
+    }
+    if (/deprecat/i.test(line)) {
+      deps.add(n);
+      warns.add(n);
+    }
+  });
+  (a?.errors || []).forEach((e) => { if (e.line) errors.add(Number(e.line)); });
+  (a?.issues || []).forEach((i) => { if (i.line) errors.add(Number(i.line)); });
+  if (a?.firstError?.line) errors.add(Number(a.firstError.line));
+  (a?.warnings || []).forEach((w) => { if (w.line) warns.add(Number(w.line)); });
+  return { errors, warns, vulns, deps };
+}
+
+function findLinesByRegex(re) {
+  const rows = getLogText().split(/\n/);
+  const hits = [];
+  rows.forEach((line, idx) => {
+    if (re.test(line)) hits.push(idx + 1);
+  });
+  return hits;
+}
+
+function resolveInsightNavigation(text) {
+  const t = String(text || '');
+  const lineMatch = t.match(/\bline\s+(\d+)\b/i);
+  if (lineMatch) return { line: Number(lineMatch[1]), query: null, kind: 'jump' };
+
+  if (/vulnerabilit/i.test(t) || /npm audit/i.test(t)) {
+    return { line: null, query: 'vulnerabilit', kind: 'warn', patterns: [/vulnerabilit/i, /\b(critical|high|moderate|low)\s+vulnerabilit/i] };
+  }
+  if (/deprecat/i.test(t)) {
+    return { line: null, query: 'deprecated', kind: 'warn', patterns: [/deprecat/i] };
+  }
+  if (/peer dependency|ERESOLVE|legacy-peer-deps/i.test(t)) {
+    return { line: null, query: 'ERESOLVE', kind: 'jump', patterns: [/ERESOLVE|Conflicting peer|peerOptional|peer dependency/i] };
+  }
+  if (/out-of-memory|heap|OOM/i.test(t)) {
+    return { line: null, query: 'out of memory', kind: 'jump', patterns: [/out of memory|heap out of memory|ENOMEM|JavaScript heap/i] };
+  }
+  if (/port already|EADDRINUSE/i.test(t)) {
+    return { line: null, query: 'EADDRINUSE', kind: 'jump', patterns: [/EADDRINUSE|address already in use|port.*in use/i] };
+  }
+  if (/missing module|cannot find module/i.test(t)) {
+    return { line: null, query: 'Cannot find module', kind: 'jump', patterns: [/Cannot find module|ERR_MODULE_NOT_FOUND|Module not found/i] };
+  }
+  if (/network\/connection|ECONNREFUSED|ENOTFOUND|cURL/i.test(t)) {
+    return { line: null, query: 'connect', kind: 'jump', patterns: [/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|cURL error|Failed to connect|Could not connect/i] };
+  }
+  if (/database/i.test(t)) {
+    return { line: null, query: 'database', kind: 'jump', patterns: [/postgres|mysql|mongodb|sequelize|SQLSTATE|MongoNetwork|authentication failed/i] };
+  }
+  if (/HTTP\s+\d{3}/i.test(t)) {
+    const codes = t.match(/HTTP\s+([\d,\s]+)/i)?.[1];
+    const first = codes?.match(/\d{3}/)?.[0];
+    return { line: null, query: first || 'HTTP', kind: 'warn', patterns: [/\b(4\d{2}|5\d{2})\b/] };
+  }
+  if (/Failed during/i.test(t)) {
+    const cmd = t.match(/Failed during `([^`]+)`/i)?.[1];
+    if (cmd) return { line: null, query: cmd, kind: 'jump', patterns: [new RegExp(cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')] };
+  }
+  if (/Installed .+ requires|peer requirement/i.test(t)) {
+    return { line: null, query: 'Found:', kind: 'jump', patterns: [/Found:|While resolving:|Conflicting peer|Could not resolve dependency/i] };
+  }
+
+  // Fallback: use distinctive words from the insight as a log search
+  const keywords = t
+    .replace(/[^\w\s./:@-]+/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 4)
+    .slice(0, 3);
+  if (keywords.length) {
+    return { line: null, query: keywords[0], kind: 'jump', patterns: keywords.map((k) => new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')) };
+  }
+  return null;
+}
+
+function goToLogMatches(nav, { announce = true } = {}) {
+  if (!nav) return false;
+  setLogEditMode(false);
+
+  if (nav.line) {
+    if ($('#log-search')) $('#log-search').value = '';
+    renderLogLines();
+    goToLogLine(nav.line, { kind: nav.kind || 'jump' });
+    return true;
+  }
+
+  let hits = [];
+  if (nav.patterns?.length) {
+    const seen = new Set();
+    nav.patterns.forEach((re) => {
+      findLinesByRegex(re).forEach((n) => {
+        if (!seen.has(n)) {
+          seen.add(n);
+          hits.push(n);
+        }
+      });
+    });
+  }
+
+  const q = nav.query || '';
+  if ($('#log-search')) $('#log-search').value = q;
+  renderLogLines();
+
+  // Prefer regex-derived hits; fall back to current search matches
+  if (hits.length) {
+    searchMatchLines = hits;
+    searchMatchIndex = 0;
+    // ensure tags are visible for those lines
+    hits.forEach((n) => {
+      const el = document.getElementById(`log-src-${n}`);
+      if (el) {
+        el.classList.add('is-search-hit');
+        if (nav.kind === 'warn') el.classList.add('is-warn');
+        else el.classList.add('is-error');
+      }
+    });
+    activateSearchMatch(0, true);
+    if (announce && $('#log-search-meta')) {
+      $('#log-search-meta').textContent = `1/${hits.length}`;
+    }
+    return true;
+  }
+
+  runLogSearch(true);
+  return searchMatchLines.length > 0;
+}
+
+function renderLogLines() {
+  const container = $('#log-lines');
+  const text = getLogText();
+  if (!container) return;
+  if (!text.trim()) {
+    container.innerHTML = '<div class="placeholder" style="padding:1rem">Paste or drop a log to browse lines.</div>';
+    return;
+  }
+  const { errors, warns, vulns, deps } = markedLineSet(lastAnalysis);
+  const q = ($('#log-search')?.value || '').trim();
+  const qLower = q.toLowerCase();
+  const rows = text.split(/\n/);
+  searchMatchLines = [];
+
+  container.innerHTML = rows.map((line, idx) => {
+    const n = idx + 1;
+    let cls = 'log-src-line';
+    if (errors.has(n)) cls += ' is-error';
+    else if (vulns.has(n)) cls += ' is-warn is-vuln';
+    else if (deps.has(n)) cls += ' is-warn is-dep';
+    else if (warns.has(n)) cls += ' is-warn';
+    let body = esc(line || ' ');
+    if (q && line.toLowerCase().includes(qLower)) {
+      searchMatchLines.push(n);
+      cls += ' is-search-hit';
+      const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      body = esc(line).replace(re, (m) => `<mark>${m}</mark>`);
+    }
+    return `<div class="${cls}" data-line="${n}" id="log-src-${n}"><span class="src-ln">${n}</span><span class="src-tx">${body || ' '}</span></div>`;
+  }).join('');
+
+  updateSearchMeta();
+  if (searchMatchIndex >= 0 && searchMatchLines[searchMatchIndex]) {
+    activateSearchMatch(searchMatchIndex, false);
+  }
+}
+
+function updateSearchMeta() {
+  const meta = $('#log-search-meta');
+  if (!meta) return;
+  const q = ($('#log-search')?.value || '').trim();
+  if (!q) {
+    meta.textContent = '—';
+    return;
+  }
+  if (!searchMatchLines.length) {
+    meta.textContent = '0 matches';
+    return;
+  }
+  meta.textContent = `${searchMatchIndex + 1}/${searchMatchLines.length}`;
+}
+
+function activateSearchMatch(index, scroll = true) {
+  document.querySelectorAll('.log-src-line.is-search-active').forEach((el) => el.classList.remove('is-search-active'));
+  if (!searchMatchLines.length) {
+    searchMatchIndex = -1;
+    updateSearchMeta();
+    return;
+  }
+  searchMatchIndex = ((index % searchMatchLines.length) + searchMatchLines.length) % searchMatchLines.length;
+  const line = searchMatchLines[searchMatchIndex];
+  const el = document.getElementById(`log-src-${line}`);
+  if (el) {
+    el.classList.add('is-search-active');
+    if (scroll) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  updateSearchMeta();
+}
+
+function goToLogLine(lineNum, { kind = 'jump' } = {}) {
+  const n = Number(lineNum);
+  if (!n || n < 1) return;
+  setLogEditMode(false);
+  renderLogLines();
+  const el = document.getElementById(`log-src-${n}`);
+  if (!el) return;
+  document.querySelectorAll('.log-src-line.is-jump-active').forEach((x) => x.classList.remove('is-jump-active'));
+  el.classList.add('is-jump-active');
+  if (kind === 'warn') el.classList.add('is-warn');
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  clearTimeout(jumpClearTimer);
+  jumpClearTimer = setTimeout(() => el.classList.remove('is-jump-active'), 2200);
+}
+
+function wireGotoClicks(root) {
+  root.querySelectorAll('[data-goto-line]').forEach((el) => {
+    el.classList.add('goto-log-line');
+    el.title = `Go to line ${el.getAttribute('data-goto-line')}`;
+    el.addEventListener('click', () => {
+      goToLogLine(el.getAttribute('data-goto-line'), {
+        kind: el.getAttribute('data-goto-kind') || 'jump',
+      });
+    });
+  });
+
+  root.querySelectorAll('[data-goto-nav]').forEach((el) => {
+    el.classList.add('goto-log-line');
+    if (!el.title) el.title = 'Click to highlight matching log lines (use ↑/↓ for next match)';
+    el.addEventListener('click', () => {
+      try {
+        const nav = JSON.parse(decodeURIComponent(el.getAttribute('data-goto-nav')));
+        if (nav.patternSources?.length) {
+          nav.patterns = nav.patternSources.map((src) => new RegExp(src, 'i'));
+        }
+        const ok = goToLogMatches(nav);
+        if (!ok && el.getAttribute('data-goto-line')) {
+          goToLogLine(el.getAttribute('data-goto-line'), {
+            kind: el.getAttribute('data-goto-kind') || 'jump',
+          });
+        }
+      } catch {
+        /* ignore bad nav payload */
+      }
+    });
+  });
+}
+
+function navAttr(nav) {
+  if (!nav) return '';
+  const payload = {
+    line: nav.line || null,
+    query: nav.query || null,
+    kind: nav.kind || 'jump',
+    patternSources: (nav.patterns || []).map((re) => re.source),
+  };
+  return ` data-goto-nav="${encodeURIComponent(JSON.stringify(payload))}"`;
+}
+
+function runLogSearch(resetIndex = true) {
+  if (logEditMode) setLogEditMode(false);
+  else renderLogLines();
+  if (resetIndex) searchMatchIndex = searchMatchLines.length ? 0 : -1;
+  if (searchMatchLines.length) activateSearchMatch(searchMatchIndex);
+  else updateSearchMeta();
+}
+
 async function runAnalysis(log, { skipHistory = false } = {}) {
   if (!String(log || '').trim()) return;
   lastLogText = String(log);
+  if ($('#log-input')) $('#log-input').value = log;
   setWorkspaceExpanded(false);
   $('#analyze-out').innerHTML = '<div class="placeholder"><span class="spinner"></span> Analyzing…</div>';
   try {
@@ -178,6 +481,7 @@ async function runAnalysis(log, { skipHistory = false } = {}) {
     lastShareId = saveShare(sharePayload);
     renderAnalysis(a);
     setWorkspaceExpanded(true);
+    setLogEditMode(false);
     renderHistory();
   } catch (e) {
     $('#analyze-out').innerHTML = `<div class="verdict failed">Error: ${esc(e.message)}</div>`;
@@ -192,8 +496,39 @@ $('#analyze-clear').addEventListener('click', () => {
   lastAnalysis = null;
   lastLogText = '';
   lastShareId = null;
+  searchMatchLines = [];
+  searchMatchIndex = -1;
+  if ($('#log-search')) $('#log-search').value = '';
   setWorkspaceExpanded(false);
+  setLogEditMode(true);
   $('#analyze-out').innerHTML = '<div class="placeholder">Analysis will appear here.</div>';
+  renderLogLines();
+  updateSearchMeta();
+});
+
+$('#log-edit-toggle')?.addEventListener('click', () => {
+  setLogEditMode(!logEditMode);
+});
+
+$('#log-search')?.addEventListener('input', () => runLogSearch(true));
+$('#log-search')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (e.shiftKey) activateSearchMatch(searchMatchIndex - 1);
+    else activateSearchMatch(searchMatchIndex + 1);
+  }
+});
+$('#log-search-prev')?.addEventListener('click', () => {
+  if (logEditMode) runLogSearch(false);
+  activateSearchMatch(searchMatchIndex <= 0 ? searchMatchLines.length - 1 : searchMatchIndex - 1);
+});
+$('#log-search-next')?.addEventListener('click', () => {
+  if (logEditMode) runLogSearch(false);
+  activateSearchMatch(searchMatchIndex + 1);
+});
+
+$('#log-input')?.addEventListener('input', () => {
+  lastLogText = $('#log-input').value;
 });
 
 // --- File choose + drag/drop ---
@@ -201,6 +536,7 @@ async function loadLogFile(file) {
   if (!file) return;
   const text = await file.text();
   $('#log-input').value = text;
+  lastLogText = text;
   await runAnalysis(text);
 }
 
@@ -393,6 +729,7 @@ function restoreFromHistory(entry) {
   lastShareId = saveShare(sharePayload);
   renderAnalysis(entry.analysis);
   setWorkspaceExpanded(true);
+  setLogEditMode(false);
 }
 
 function renderHistory() {
@@ -460,10 +797,26 @@ function renderAnalysis(a) {
       <span class="verdict-reason">${esc(a.verdictReason)}</span>
     </div>`;
 
+  // Insights always first (success + failure) — each insight is clickable
+  html += `<div class="insights-box">`;
+  html += `<div class="block-h">Insights <span class="hint-inline">click any insight to jump in the log</span></div>`;
+  if (a.insights?.length) {
+    html += a.insights.map((ins) => {
+      const nav = resolveInsightNavigation(ins.text);
+      const attrs = navAttr(nav);
+      const clickable = nav ? ' goto-log-line' : '';
+      return `<div class="insight insight-${esc(ins.level)}${clickable}"${attrs}>${esc(ins.text)}</div>`;
+    }).join('');
+  } else {
+    html += `<div class="insight insight-info">${isSuccess ? 'No additional insights — run looks clean.' : 'No structured insights for this log.'}</div>`;
+  }
+  html += `</div>`;
+
   if (!isSuccess) {
+    const rootLine = a.firstError?.line || a.issues?.[0]?.line || '';
     html += `
-      <div class="root-cause-box">
-        <div class="block-h">Root cause</div>
+      <div class="root-cause-box${rootLine ? ' goto-log-line' : ''}" ${rootLine ? `data-goto-line="${rootLine}"` : ''}>
+        <div class="block-h">Root cause${rootLine ? ` · click to go to L${rootLine}` : ''}</div>
         <div class="root-cause-text">${esc(rootCause)}</div>
       </div>`;
   }
@@ -508,28 +861,50 @@ function renderAnalysis(a) {
   if (!isSuccess && a.issues?.length && !a.failureDetail) {
     html += `<div class="block-h">Detected issues (${a.issues.length})</div>`;
     html += a.issues.slice(0, 5).map((issue) => `
-      <div class="issue-card">
+      <div class="issue-card${issue.line ? ' goto-log-line' : ''}" ${issue.line ? `data-goto-line="${issue.line}"` : ''}>
         <div class="issue-title">${esc(issue.title)}</div>
-        ${issue.line ? `<div class="issue-meta">Line ${issue.line} · ${esc(issue.category)}</div>` : ''}
+        ${issue.line ? `<div class="issue-meta">Line ${issue.line} · ${esc(issue.category)} · click to jump</div>` : ''}
         <div class="issue-msg">${esc(issue.exactMessage)}</div>
       </div>`).join('');
-  } else if (!isSuccess && a.issues?.length && a.failureDetail && a.issues[0]?.investigation?.length) {
-    html += `<div class="block-h">Investigation steps</div>`;
-    html += `<ol class="resolution-list">${a.issues[0].investigation.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`;
+  } else if (!isSuccess && a.issues?.length && a.failureDetail) {
+    if (a.issues[0]?.line) {
+      html += `<div class="block-h">Jump to signal</div>`;
+      html += `<div class="log-line err goto-log-line" data-goto-line="${a.issues[0].line}"><span class="ln">L${a.issues[0].line}</span><span class="tx">${esc(a.issues[0].exactMessage || a.issues[0].title)} · click to jump</span></div>`;
+    }
+    if (a.issues[0]?.investigation?.length) {
+      html += `<div class="block-h">Investigation steps</div>`;
+      html += `<ol class="resolution-list">${a.issues[0].investigation.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>`;
+    }
   }
 
-  if (!isSuccess && a.insights?.length) {
-    html += `<div class="block-h">Insights</div>`;
-    html += a.insights.map((ins) => `<div class="insight insight-${ins.level}">${esc(ins.text)}</div>`).join('');
-  }
+  const firstErrLine = a.firstError?.line || a.errors?.[0]?.line || a.issues?.[0]?.line || '';
+  const firstWarnLine = a.warnings?.[0]?.line || '';
+  const vulnNav = (s.vulnerabilities != null && s.vulnerabilities > 0)
+    ? resolveInsightNavigation('npm vulnerability')
+    : null;
+  const depNav = (s.deprecations > 0)
+    ? resolveInsightNavigation('deprecated packages')
+    : null;
+  const errStat = firstErrLine
+    ? `<div class="stat goto-log-line" data-goto-line="${firstErrLine}" data-goto-kind="jump" title="Jump to first error"><span class="stat-n ${s.errors ? 'err' : 'ok'}">${s.errors}</span><span class="stat-l">Errors</span></div>`
+    : stat(s.errors, 'Errors', s.errors ? 'err' : 'ok');
+  const warnStat = firstWarnLine
+    ? `<div class="stat goto-log-line" data-goto-line="${firstWarnLine}" data-goto-kind="warn" title="Jump to first warning"><span class="stat-n ${s.warnings ? 'warn' : ''}">${s.warnings}</span><span class="stat-l">Warnings</span></div>`
+    : stat(s.warnings, 'Warnings', s.warnings ? 'warn' : '');
+  const depStat = depNav
+    ? `<div class="stat goto-log-line"${navAttr(depNav)} title="Highlight deprecation lines"><span class="stat-n">${s.deprecations}</span><span class="stat-l">Deprecated</span></div>`
+    : stat(s.deprecations, 'Deprecated');
+  const vulnStat = vulnNav
+    ? `<div class="stat goto-log-line"${navAttr(vulnNav)} title="Highlight vulnerability lines"><span class="stat-n ${vb?.high || vb?.critical ? 'warn' : ''}">${s.vulnerabilities === null ? '—' : s.vulnerabilities}</span><span class="stat-l">Vulns</span></div>`
+    : stat(s.vulnerabilities === null ? '—' : s.vulnerabilities, 'Vulns', vb?.high || vb?.critical ? 'warn' : '');
 
   html += `
     <div class="stats">
-      ${stat(s.errors, 'Errors', s.errors ? 'err' : 'ok')}
-      ${stat(s.warnings, 'Warnings', s.warnings ? 'warn' : '')}
-      ${stat(s.deprecations, 'Deprecated')}
+      ${errStat}
+      ${warnStat}
+      ${depStat}
       ${stat(s.exitCode === null ? '—' : s.exitCode, 'Exit code', s.exitCode === 0 ? 'ok' : (s.exitCode ? 'err' : ''))}
-      ${stat(s.vulnerabilities === null ? '—' : s.vulnerabilities, 'Vulns', vb?.high || vb?.critical ? 'warn' : '')}
+      ${vulnStat}
       ${stat(s.durationSec === null ? '—' : s.durationSec + 's', 'Duration')}
       ${stat(s.commandsRun || 0, 'Commands')}
       ${stat(s.stackTraceLines || 0, 'Stack lines', s.stackTraceLines ? 'warn' : '')}
@@ -562,40 +937,41 @@ function renderAnalysis(a) {
   }
 
   if (!isSuccess && a.failedPhase) {
-    html += `<div class="block-h">Likely failure point</div><div class="insight insight-error">Phase "${esc(a.failedPhase.phase)}" near line ${a.failedPhase.line}</div>`;
+    html += `<div class="block-h">Likely failure point</div>`;
+    html += `<div class="insight insight-error goto-log-line" data-goto-line="${a.failedPhase.line}">Phase "${esc(a.failedPhase.phase)}" near line ${a.failedPhase.line} · click to jump</div>`;
   }
 
   if (!isSuccess && a.firstError) {
     html += `<div class="block-h">First error (log signal)</div>`;
-    html += `<div class="log-line err"><span class="ln">L${a.firstError.line}</span><span class="tx">${esc(a.firstError.text)}</span></div>`;
+    html += `<div class="log-line err goto-log-line" data-goto-line="${a.firstError.line}"><span class="ln">L${a.firstError.line}</span><span class="tx">${esc(a.firstError.text)}</span></div>`;
     if (a.firstError.category) html += `<div class="tag-list"><span class="tag err-tag">${esc(a.firstError.category)}</span></div>`;
   }
 
   if (a.phases?.length) {
     html += `<div class="block-h">Build timeline</div><div class="timeline">`;
     html += a.phases.map((p) => `
-      <div class="timeline-item">
+      <div class="timeline-item goto-log-line" data-goto-line="${p.line}">
         <span class="timeline-phase">${esc(p.phase)}</span>
-        <span class="timeline-meta">L${p.line}${p.durationSec != null ? ` · ${p.durationSec}s` : ''}</span>
+        <span class="timeline-meta">L${p.line}${p.durationSec != null ? ` · ${p.durationSec}s` : ''} · jump</span>
       </div>`).join('');
     html += `</div>`;
   }
 
   if (a.commands?.length) {
     html += `<div class="block-h">Commands run</div>`;
-    html += a.commands.map((c) => `<div class="log-line"><span class="ln">L${c.line}</span><span class="tx">${esc(c.command)}</span></div>`).join('');
+    html += a.commands.map((c) => `<div class="log-line goto-log-line" data-goto-line="${c.line}"><span class="ln">L${c.line}</span><span class="tx">${esc(c.command)}</span></div>`).join('');
   }
 
   if (a.errors?.length && a.verdict !== 'success') {
-    html += `<div class="block-h">Errors (${a.errors.length})</div>`;
-    html += a.errors.map((e) => `<div class="log-line err"><span class="ln">L${e.line}</span><span class="tx">${esc(e.text)}${e.category ? `<span class="line-cat">${esc(e.category)}</span>` : ''}</span></div>`).join('');
+    html += `<div class="block-h">Errors (${a.errors.length}) — click to jump</div>`;
+    html += a.errors.map((e) => `<div class="log-line err goto-log-line" data-goto-line="${e.line}"><span class="ln">L${e.line}</span><span class="tx">${esc(e.text)}${e.category ? `<span class="line-cat">${esc(e.category)}</span>` : ''}</span></div>`).join('');
   }
   if (a.deprecations?.length) {
     html += `<div class="block-h">Deprecated packages</div><div class="tag-list">${a.deprecations.map((d) => `<span class="tag">${esc(d)}</span>`).join('')}</div>`;
   }
   if (a.warnings?.length && a.verdict !== 'success') {
-    html += `<div class="block-h">Warnings (${a.warnings.length})</div>`;
-    html += a.warnings.slice(0, 15).map((w) => `<div class="log-line warn"><span class="ln">L${w.line}</span><span class="tx">${esc(w.text)}</span></div>`).join('');
+    html += `<div class="block-h">Warnings (${a.warnings.length}) — click to jump</div>`;
+    html += a.warnings.slice(0, 15).map((w) => `<div class="log-line warn goto-log-line" data-goto-line="${w.line}" data-goto-kind="warn"><span class="ln">L${w.line}</span><span class="tx">${esc(w.text)}</span></div>`).join('');
   }
 
   lastBugReportText = (!isSuccess && a.bugReport?.hasIssue) ? a.bugReport.copyText : '';
@@ -627,6 +1003,7 @@ function renderAnalysis(a) {
       flashBtn(e.currentTarget, 'Share failed');
     }
   });
+  wireGotoClicks($('#analyze-out'));
 }
 
 function verdictLabel(v) {

@@ -49,7 +49,15 @@
         <div class="workspace-panes" id="workspace-panes">
           <div class="pane pane-input" id="drop-zone">
             <div class="drop-overlay" id="drop-overlay" aria-hidden="true">Drop log file to analyze</div>
-            <textarea id="log-input" class="mono-input" placeholder="Paste log output here, or drag & drop a .log / .txt / .json file…" spellcheck="false"></textarea>
+            <div class="log-toolbar">
+              <input id="log-search" class="log-search" type="search" placeholder="Search log (errors, warnings, text)…" autocomplete="off" />
+              <button type="button" id="log-search-prev" class="btn-ghost btn-sm" title="Previous match">↑</button>
+              <button type="button" id="log-search-next" class="btn-ghost btn-sm" title="Next match">↓</button>
+              <span id="log-search-meta" class="log-search-meta">—</span>
+              <button type="button" id="log-edit-toggle" class="btn-ghost btn-sm">Edit</button>
+            </div>
+            <textarea id="log-input" class="mono-input log-input-edit" placeholder="Paste log output here, or drag & drop a .log / .txt / .json file…" spellcheck="false"></textarea>
+            <div id="log-lines" class="log-lines" aria-label="Log lines" hidden></div>
           </div>
           <div class="pane pane-output">
             <div id="analyze-out" class="output">
